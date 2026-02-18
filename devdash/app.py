@@ -37,6 +37,8 @@ from devdash.processes import (
 import dataclasses
 import json
 import re
+import threading
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -244,9 +246,16 @@ class DevDashApp(App):
     _selected_pids: set[int] = set()
     _selected_containers: set[str] = set()
 
-    def __init__(self, config: Config | None = None) -> None:
+    def __init__(
+        self,
+        config: Config | None = None,
+        update_check_event: threading.Event | None = None,
+        get_update_message: Callable[[], str | None] | None = None,
+    ) -> None:
         super().__init__()
         self._config = config or Config()
+        self._update_check_event = update_check_event
+        self._get_update_message = get_update_message
         global _color_low, _color_high
         _color_low = self._config.color_threshold_low
         _color_high = self._config.color_threshold_high
@@ -284,6 +293,22 @@ class DevDashApp(App):
         self._highlight_active_table()
         self.load_data()
         self.set_interval(self._config.refresh_rate, self.load_data)
+
+        if self._update_check_event is not None:
+            self.set_timer(2, self._schedule_update_check)
+
+    def _schedule_update_check(self) -> None:
+        self._show_update_notification()
+
+    @work(thread=True)
+    def _show_update_notification(self) -> None:
+        if self._update_check_event is None:
+            return
+        self._update_check_event.wait(timeout=8)
+        if self._get_update_message is not None:
+            msg = self._get_update_message()
+            if msg:
+                self.call_from_thread(self.notify, msg, severity="information", timeout=8)
 
     def _highlight_active_table(self) -> None:
         table_header_map = {
