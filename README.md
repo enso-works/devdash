@@ -21,6 +21,39 @@ devdash exists to give you a single pane of glass for all of it:
 
 It auto-refreshes every 3 seconds (configurable), preserves your cursor position, and degrades gracefully when Docker isn't running.
 
+## Install
+
+Requires Python 3.10+ and git.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | bash
+```
+
+Install a specific version:
+
+```sh
+VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | bash
+```
+
+This clones to `~/.devdash`, creates a virtualenv, and symlinks the binary to `~/.local/bin/devdash`.
+
+Running the installer again will update to the latest release (idempotent).
+
+## Usage
+
+```sh
+devdash                          # launch with defaults
+devdash --config path/to/config  # use custom config file
+devdash --version                # print version
+devdash --update                 # update to latest release
+```
+
+## Uninstall
+
+```sh
+rm -rf ~/.devdash ~/.local/bin/devdash
+```
+
 ## Screenshots
 
 ### Dev Tab
@@ -40,33 +73,6 @@ System resource gauges (CPU, memory, swap, disk, network) and a full process lis
 Press `/` to filter across all columns. Matches persist across auto-refresh.
 
 ![Filter](screenshots/filter.svg)
-
-## Install
-
-Requires Python 3.10+ and git.
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | bash
-```
-
-This clones to `~/.devdash`, creates a virtualenv, and symlinks the binary to `~/.local/bin/devdash`.
-
-Running the installer again will update an existing installation (idempotent).
-
-## Usage
-
-```sh
-devdash                          # launch with defaults
-devdash --config path/to/config  # use custom config file
-devdash --version                # print version
-devdash --update                 # pull latest and reinstall
-```
-
-## Uninstall
-
-```sh
-rm -rf ~/.devdash ~/.local/bin/devdash
-```
 
 ## Keybindings
 

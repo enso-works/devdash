@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="https://github.com/enso-works/devdash.git"
+REPO_URL="https://github.com/enso-works/devdash.git"
+REPO_API="https://api.github.com/repos/enso-works/devdash"
 INSTALL_DIR="$HOME/.devdash"
 BIN_DIR="$HOME/.local/bin"
 
@@ -30,16 +31,53 @@ info "Using $PYTHON ($($PYTHON --version 2>&1))"
 # --- Check git ---
 command -v git >/dev/null 2>&1 || error "git is required but not found."
 
+# --- Resolve version ---
+resolve_version() {
+    if [ -n "${VERSION:-}" ]; then
+        echo "v${VERSION#v}"
+        return
+    fi
+    # Try GitHub API for latest release
+    if command -v curl >/dev/null 2>&1; then
+        tag=$(curl -fsSL "$REPO_API/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        if [ -n "$tag" ]; then
+            echo "$tag"
+            return
+        fi
+    fi
+    # Try git ls-remote for latest tag
+    tag=$(git ls-remote --tags --sort=-v:refname "$REPO_URL" 2>/dev/null | head -1 | sed 's|.*/||')
+    if [ -n "$tag" ]; then
+        echo "$tag"
+        return
+    fi
+    # Fallback to main
+    echo "main"
+}
+
+TARGET_REF=$(resolve_version)
+info "Target version: $TARGET_REF"
+
 # --- Clone or update ---
 if [ -d "$INSTALL_DIR/.git" ]; then
     info "Updating existing installation..."
-    git -C "$INSTALL_DIR" pull --ff-only
+    git -C "$INSTALL_DIR" fetch --tags --force
+    if [ "$TARGET_REF" = "main" ]; then
+        git -C "$INSTALL_DIR" checkout main --quiet
+        git -C "$INSTALL_DIR" pull --ff-only
+    else
+        git -C "$INSTALL_DIR" checkout "$TARGET_REF" --quiet
+    fi
 else
     if [ -d "$INSTALL_DIR" ]; then
         error "$INSTALL_DIR exists but is not a git repo. Remove it first: rm -rf $INSTALL_DIR"
     fi
     info "Cloning devdash..."
-    git clone "$REPO" "$INSTALL_DIR"
+    if [ "$TARGET_REF" = "main" ]; then
+        git clone "$REPO_URL" "$INSTALL_DIR"
+    else
+        git clone --branch "$TARGET_REF" "$REPO_URL" "$INSTALL_DIR"
+    fi
 fi
 
 # --- Create venv and install ---
