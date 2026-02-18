@@ -371,3 +371,175 @@ def kill_process(pid: int) -> bool:
         return True
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return False
+
+
+@dataclass
+class ClaudeInstance:
+    pid: int
+    project: str
+    cwd: str
+    tty: str
+    cpu_percent: float
+    memory_mb: float
+    uptime: str
+
+
+@dataclass
+class ClaudeProject:
+    name: str
+    path: str
+    sessions: int
+    messages: int
+    last_active: str
+    is_running: bool
+
+
+def _format_relative_time(ts_ms: float) -> str:
+    diff = time.time() - ts_ms / 1000
+    if diff < 60:
+        return "just now"
+    if diff < 3600:
+        return f"{int(diff // 60)}m ago"
+    if diff < 86400:
+        h = int(diff // 3600)
+        return f"{h}h ago"
+    d = int(diff // 86400)
+    if d == 1:
+        return "1d ago"
+    if d < 30:
+        return f"{d}d ago"
+    return f"{d // 30}mo ago"
+
+
+def get_claude_instances() -> list[ClaudeInstance]:
+    results = []
+    for proc in psutil.process_iter(["pid", "name", "cwd", "create_time"]):
+        try:
+            info = proc.info
+            name = info.get("name") or ""
+            if name != "claude":
+                continue
+
+            try:
+                exe = proc.exe()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                exe = ""
+            if "/Applications/" in exe:
+                continue
+
+            try:
+                terminal = proc.terminal()
+            except (psutil.AccessDenied, psutil.NoSuchProcess, AttributeError):
+                terminal = None
+            if not terminal:
+                continue
+
+            pid = info["pid"]
+            cwd = info.get("cwd") or ""
+            create_time = info.get("create_time") or 0
+            uptime = time.time() - create_time if create_time else 0
+
+            try:
+                cpu = proc.cpu_percent(interval=0)
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                cpu = 0.0
+
+            try:
+                mem = proc.memory_info().rss / (1024 * 1024)
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                mem = 0.0
+
+            project = Path(cwd).name if cwd else ""
+
+            results.append(ClaudeInstance(
+                pid=pid,
+                project=project,
+                cwd=_shorten_cwd(cwd),
+                tty=terminal,
+                cpu_percent=cpu,
+                memory_mb=mem,
+                uptime=_format_uptime(uptime),
+            ))
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+
+    results.sort(key=lambda p: p.memory_mb, reverse=True)
+    return results
+
+
+def get_claude_projects() -> list[ClaudeProject]:
+    claude_dir = Path.home() / ".claude"
+    history_file = claude_dir / "history.jsonl"
+    projects_dir = claude_dir / "projects"
+
+    # Parse history.jsonl for message counts and last active times per project
+    project_messages: dict[str, int] = {}
+    project_last_active: dict[str, float] = {}
+    if history_file.is_file():
+        try:
+            for line in history_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    proj = entry.get("project", "")
+                    ts = entry.get("timestamp", 0)
+                    if proj:
+                        project_messages[proj] = project_messages.get(proj, 0) + 1
+                        if ts > project_last_active.get(proj, 0):
+                            project_last_active[proj] = ts
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        except OSError:
+            pass
+
+    # Get running instance CWDs for status
+    try:
+        running_instances = get_claude_instances()
+    except Exception:
+        running_instances = []
+    running_cwds: set[str] = set()
+    for inst in running_instances:
+        # Expand ~ back to home for comparison
+        cwd = inst.cwd
+        if cwd.startswith("~"):
+            cwd = str(Path.home()) + cwd[1:]
+        running_cwds.add(cwd)
+
+    # Build project list from history entries
+    seen_paths: set[str] = set()
+    results = []
+    for proj_path in project_messages:
+        if proj_path in seen_paths:
+            continue
+        seen_paths.add(proj_path)
+
+        name = Path(proj_path).name
+        # Count session files in projects dir
+        encoded = proj_path.replace("/", "-")
+        proj_dir = projects_dir / encoded
+        sessions = 0
+        if proj_dir.is_dir():
+            sessions = sum(1 for f in proj_dir.iterdir() if f.suffix == ".jsonl")
+
+        messages = project_messages.get(proj_path, 0)
+        last_ts = project_last_active.get(proj_path, 0)
+        last_active = _format_relative_time(last_ts) if last_ts else "unknown"
+        is_running = proj_path in running_cwds
+
+        results.append(ClaudeProject(
+            name=name,
+            path=proj_path,
+            sessions=sessions,
+            messages=messages,
+            last_active=last_active,
+            is_running=is_running,
+        ))
+
+    # Sort by last active descending
+    results.sort(
+        key=lambda p: project_last_active.get(p.path, 0),
+        reverse=True,
+    )
+    return results

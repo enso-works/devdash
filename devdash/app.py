@@ -20,12 +20,16 @@ from textual.widgets import (
 from devdash.config import Config
 from devdash.screens import ConfirmScreen, LogViewerScreen, ProcessDetailScreen
 from devdash.processes import (
+    ClaudeInstance,
+    ClaudeProject,
     DockerContainer,
     GeneralProcess,
     NodeProcess,
     SystemStats,
     _format_bytes_rate,
     get_all_processes,
+    get_claude_instances,
+    get_claude_projects,
     get_docker_containers,
     get_node_processes,
     get_system_stats,
@@ -42,8 +46,14 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+import shlex
+
 _color_low = 50.0
 _color_high = 80.0
+
+
+def _shell_quote(path: str) -> str:
+    return shlex.quote(path)
 
 
 def _severity_style(percent: float) -> str:
@@ -86,6 +96,10 @@ class DevDashCommands(Provider):
             ("Refresh data", "Reload all process and system data", "action_refresh"),
             ("Switch to Dev tab", "Show node processes and docker containers", "action_tab_dev"),
             ("Switch to System tab", "Show all processes and system stats", "action_tab_system"),
+            ("Switch to Claude tab", "Show Claude Code instances and projects", "action_tab_claude"),
+            ("Launch Claude", "Open terminal and start Claude in the selected project", "action_launch_claude"),
+            ("Open in Finder", "Open the selected project in Finder", "action_open_in_finder"),
+            ("Open in VS Code", "Open the selected project in VS Code", "action_open_in_vscode"),
             ("Toggle filter", "Show/hide the process filter bar", "action_toggle_filter"),
             ("Kill/Stop selected", "Kill the selected process or stop container", "action_kill"),
             ("View logs", "View Docker container logs", "action_logs"),
@@ -139,7 +153,7 @@ class DevDashApp(App):
         background: dodgerblue;
     }
 
-    #node-table, #docker-table {
+    #node-table, #docker-table, #claude-instances-table, #claude-projects-table {
         height: 1fr;
         min-height: 5;
     }
@@ -229,12 +243,18 @@ class DevDashApp(App):
         Binding("tab", "focus_next_table", "Next Table", show=True),
         Binding("1", "tab_dev", "Dev Tab"),
         Binding("2", "tab_system", "System Tab"),
+        Binding("3", "tab_claude", "Claude Tab"),
+        Binding("enter", "launch_claude", "Launch Claude", show=False, priority=False),
+        Binding("o", "open_in_finder", "Finder"),
+        Binding("c", "open_in_vscode", "VS Code"),
     ]
 
     node_procs: list[NodeProcess] = []
     docker_containers: list[DockerContainer] = []
     all_procs: list[GeneralProcess] = []
     system_stats: SystemStats | None = None
+    claude_instances: list[ClaudeInstance] = []
+    claude_projects: list[ClaudeProject] = []
     _current_tab: str = "dev"
     _active_table_id: str = "node-table"
     _sort_state: dict[str, tuple[int, bool]] = {}  # table_id -> (col_index, reverse)
@@ -274,6 +294,11 @@ class DevDashApp(App):
                 yield Static("", id="sys-stats")
                 yield Static(" All Processes (by memory)", id="procs-header", classes="section-header active")
                 yield DataTable(id="all-procs-table")
+            with TabPane("[3] Claude", id="claude"):
+                yield Static(" Running Instances", id="claude-instances-header", classes="section-header active")
+                yield DataTable(id="claude-instances-table")
+                yield Static(" Projects", id="claude-projects-header", classes="section-header")
+                yield DataTable(id="claude-projects-table")
         yield StatusBar("Loading...", id="status-bar")
         yield Footer()
 
@@ -289,6 +314,14 @@ class DevDashApp(App):
         all_table = self.query_one("#all-procs-table", DataTable)
         all_table.cursor_type = "row"
         all_table.add_columns("PID", "Name", "CPU %", "Memory", "Mem %", "User", "Status", "Command")
+
+        claude_inst_table = self.query_one("#claude-instances-table", DataTable)
+        claude_inst_table.cursor_type = "row"
+        claude_inst_table.add_columns("PID", "Project", "TTY", "Memory", "CPU", "Uptime", "Directory")
+
+        claude_proj_table = self.query_one("#claude-projects-table", DataTable)
+        claude_proj_table.cursor_type = "row"
+        claude_proj_table.add_columns("Project", "Sessions", "Messages", "Last Active", "Status", "Path")
 
         self._highlight_active_table()
         self.load_data()
@@ -315,6 +348,8 @@ class DevDashApp(App):
             "node-table": "node-header",
             "docker-table": "docker-header",
             "all-procs-table": "procs-header",
+            "claude-instances-table": "claude-instances-header",
+            "claude-projects-table": "claude-projects-header",
         }
         for table_id, header_id in table_header_map.items():
             try:
@@ -347,11 +382,20 @@ class DevDashApp(App):
         self._active_table_id = "all-procs-table"
         self._highlight_active_table()
 
+    def action_tab_claude(self) -> None:
+        tabs = self.query_one("#tabs", TabbedContent)
+        tabs.active = "claude"
+        self._current_tab = "claude"
+        self._active_table_id = "claude-instances-table"
+        self._highlight_active_table()
+
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         tab_id = event.pane.id or ""
         self._current_tab = tab_id
         if tab_id == "dev":
             self._active_table_id = "node-table"
+        elif tab_id == "claude":
+            self._active_table_id = "claude-instances-table"
         else:
             self._active_table_id = "all-procs-table"
         self._highlight_active_table()
@@ -362,6 +406,11 @@ class DevDashApp(App):
                 self._active_table_id = "docker-table"
             else:
                 self._active_table_id = "node-table"
+        elif self._current_tab == "claude":
+            if self._active_table_id == "claude-instances-table":
+                self._active_table_id = "claude-projects-table"
+            else:
+                self._active_table_id = "claude-instances-table"
         self._highlight_active_table()
 
     def action_toggle_filter(self) -> None:
@@ -412,6 +461,7 @@ class DevDashApp(App):
             self._update_dev_tables(self.node_procs, self.docker_containers)
         if self.all_procs and self.system_stats:
             self._update_system_tab(self.all_procs, self.system_stats)
+        self._update_claude_tab(self.claude_instances, self.claude_projects)
 
     @staticmethod
     def _parse_sort_value(cell: object) -> object:
@@ -473,7 +523,9 @@ class DevDashApp(App):
         docker_containers = get_docker_containers()
         all_procs = get_all_processes(limit=self._config.process_limit)
         stats = get_system_stats()
-        self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats)
+        claude_instances = get_claude_instances()
+        claude_projects = get_claude_projects()
+        self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats, claude_instances, claude_projects)
 
     def _update_all(
         self,
@@ -481,6 +533,8 @@ class DevDashApp(App):
         docker_containers: list[DockerContainer],
         all_procs: list[GeneralProcess],
         stats: SystemStats,
+        claude_instances: list[ClaudeInstance] | None = None,
+        claude_projects: list[ClaudeProject] | None = None,
     ) -> None:
         self._check_notifications(node_procs, docker_containers)
 
@@ -488,15 +542,21 @@ class DevDashApp(App):
         self.docker_containers = docker_containers
         self.all_procs = all_procs
         self.system_stats = stats
+        if claude_instances is not None:
+            self.claude_instances = claude_instances
+        if claude_projects is not None:
+            self.claude_projects = claude_projects
 
         self._update_dev_tables(node_procs, docker_containers)
         self._update_system_tab(all_procs, stats)
+        self._update_claude_tab(self.claude_instances, self.claude_projects)
 
         status = self.query_one("#status-bar", StatusBar)
         cpu = f"CPU {stats.cpu_percent:.0f}%"
         mem = f"Mem {stats.memory_used_gb:.1f}/{stats.memory_total_gb:.1f}GB"
         disk = f"Disk {stats.disk_percent:.0f}%"
-        status.message = f" {cpu} | {mem} | {disk} | {len(node_procs)} node | {len(docker_containers)} docker | 1/2=tabs r=refresh k=kill q=quit"
+        claude_count = len(self.claude_instances)
+        status.message = f" {cpu} | {mem} | {disk} | {len(node_procs)} node | {len(docker_containers)} docker | {claude_count} claude | 1/2/3=tabs q=quit"
 
     def _check_notifications(
         self,
@@ -656,7 +716,146 @@ class DevDashApp(App):
         procs_header = self.query_one("#procs-header", Static)
         procs_header.update(f" All Processes ({proc_count}, by memory)")
 
+    def _update_claude_tab(
+        self, claude_instances: list[ClaudeInstance], claude_projects: list[ClaudeProject]
+    ) -> None:
+        inst_table = self.query_one("#claude-instances-table", DataTable)
+        proj_table = self.query_one("#claude-projects-table", DataTable)
+
+        inst_cursor = inst_table.cursor_row
+        proj_cursor = proj_table.cursor_row
+
+        inst_table.clear()
+        inst_count = 0
+        for inst in claude_instances:
+            cells = [
+                str(inst.pid),
+                inst.project or "-",
+                inst.tty,
+                _colored_memory(inst.memory_mb),
+                _colored_percent(inst.cpu_percent),
+                inst.uptime,
+                inst.cwd,
+            ]
+            if self._row_matches_filter(cells):
+                inst_table.add_row(*cells, key=str(inst.pid))
+                inst_count += 1
+
+        proj_table.clear()
+        proj_count = 0
+        for proj in claude_projects:
+            status = Text("running", style="bold green") if proj.is_running else Text("-", style="dim")
+            cells = [
+                proj.name,
+                str(proj.sessions),
+                str(proj.messages),
+                proj.last_active,
+                status,
+                proj.path,
+            ]
+            if self._row_matches_filter(cells):
+                proj_table.add_row(*cells, key=proj.path)
+                proj_count += 1
+
+        if inst_count and inst_cursor is not None:
+            try:
+                inst_table.move_cursor(row=min(inst_cursor, inst_count - 1))
+            except Exception:
+                pass
+        if proj_count and proj_cursor is not None:
+            try:
+                proj_table.move_cursor(row=min(proj_cursor, proj_count - 1))
+            except Exception:
+                pass
+
+        self._apply_sort("claude-instances-table")
+        self._apply_sort("claude-projects-table")
+
+        inst_header = self.query_one("#claude-instances-header", Static)
+        inst_header.update(f" Running Instances ({inst_count})")
+        proj_header = self.query_one("#claude-projects-header", Static)
+        proj_header.update(f" Projects ({proj_count})")
+
+    def _get_claude_selected_path(self) -> str | None:
+        if self._current_tab != "claude":
+            return None
+        table_id = self._active_table_id
+        table = self.query_one(f"#{table_id}", DataTable)
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except Exception:
+            return None
+
+        if table_id == "claude-projects-table":
+            return row_key.value
+        elif table_id == "claude-instances-table":
+            try:
+                pid = int(row_key.value)
+            except ValueError:
+                return None
+            inst = next((i for i in self.claude_instances if i.pid == pid), None)
+            if not inst:
+                return None
+            path = inst.cwd
+            if path.startswith("~"):
+                path = str(Path.home()) + path[1:]
+            return path
+        return None
+
+    def action_launch_claude(self) -> None:
+        path = self._get_claude_selected_path()
+        if not path:
+            return
+        import subprocess
+        name = Path(path).name
+        script = f'cd {_shell_quote(path)} && claude'
+        try:
+            subprocess.Popen(["osascript", "-e",
+                f'tell application "Terminal" to do script "{script}"'])
+            self.notify(f"Launching claude in {name}", timeout=3)
+        except Exception as e:
+            self.notify(f"Failed to launch: {e}", severity="error", timeout=5)
+
+    def _resume_claude(self) -> None:
+        path = self._get_claude_selected_path()
+        if not path:
+            return
+        import subprocess
+        name = Path(path).name
+        script = f'cd {_shell_quote(path)} && claude --resume'
+        try:
+            subprocess.Popen(["osascript", "-e",
+                f'tell application "Terminal" to do script "{script}"'])
+            self.notify(f"Resuming claude in {name}", timeout=3)
+        except Exception as e:
+            self.notify(f"Failed to resume: {e}", severity="error", timeout=5)
+
+    def action_open_in_finder(self) -> None:
+        path = self._get_claude_selected_path()
+        if not path:
+            return
+        import subprocess
+        try:
+            subprocess.Popen(["open", path])
+            self.notify(f"Opening {Path(path).name} in Finder", timeout=3)
+        except Exception as e:
+            self.notify(f"Failed to open: {e}", severity="error", timeout=5)
+
+    def action_open_in_vscode(self) -> None:
+        path = self._get_claude_selected_path()
+        if not path:
+            return
+        import subprocess
+        try:
+            subprocess.Popen(["code", path])
+            self.notify(f"Opening {Path(path).name} in VS Code", timeout=3)
+        except Exception as e:
+            self.notify(f"Failed to open: {e}", severity="error", timeout=5)
+
     def action_refresh(self) -> None:
+        if self._current_tab == "claude":
+            self._resume_claude()
+            return
         status = self.query_one("#status-bar", StatusBar)
         status.message = " Refreshing..."
         self.load_data()
