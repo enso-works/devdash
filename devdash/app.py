@@ -18,10 +18,18 @@ from textual.widgets import (
 )
 
 from devdash.config import Config
-from devdash.screens import ConfirmScreen, LogViewerScreen, ProcessDetailScreen
+from devdash.screens import (
+    ConfirmScreen,
+    ClaudeProjectDetailScreen,
+    LaunchMenuScreen,
+    LogViewerScreen,
+    ProcessDetailScreen,
+    SessionBrowserScreen,
+)
 from devdash.processes import (
     ClaudeInstance,
     ClaudeProject,
+    ClaudeStats,
     DockerContainer,
     GeneralProcess,
     NodeProcess,
@@ -30,6 +38,7 @@ from devdash.processes import (
     get_all_processes,
     get_claude_instances,
     get_claude_projects,
+    get_claude_stats,
     get_docker_containers,
     get_node_processes,
     get_system_stats,
@@ -97,9 +106,8 @@ class DevDashCommands(Provider):
             ("Switch to Dev tab", "Show node processes and docker containers", "action_tab_dev"),
             ("Switch to System tab", "Show all processes and system stats", "action_tab_system"),
             ("Switch to Claude tab", "Show Claude Code instances and projects", "action_tab_claude"),
-            ("Launch Claude", "Open terminal and start Claude in the selected project", "action_launch_claude"),
-            ("Open in Finder", "Open the selected project in Finder", "action_open_in_finder"),
-            ("Open in VS Code", "Open the selected project in VS Code", "action_open_in_vscode"),
+            ("Launch menu", "Open launch menu for selected project", "action_launch_or_details"),
+            ("Session browser", "Browse sessions for selected project", "action_session_browser"),
             ("Toggle filter", "Show/hide the process filter bar", "action_toggle_filter"),
             ("Kill/Stop selected", "Kill the selected process or stop container", "action_kill"),
             ("View logs", "View Docker container logs", "action_logs"),
@@ -228,6 +236,14 @@ class DevDashApp(App):
     #filter-input {
         width: 100%;
     }
+
+    #claude-stats-bar {
+        height: auto;
+        max-height: 4;
+        padding: 0 1;
+        background: $surface;
+        color: $text-muted;
+    }
     """
 
     TITLE = "devdash"
@@ -244,9 +260,8 @@ class DevDashApp(App):
         Binding("1", "tab_dev", "Dev Tab"),
         Binding("2", "tab_system", "System Tab"),
         Binding("3", "tab_claude", "Claude Tab"),
-        Binding("enter", "launch_claude", "Launch Claude", show=False, priority=False),
-        Binding("o", "open_in_finder", "Finder"),
-        Binding("c", "open_in_vscode", "VS Code"),
+        Binding("enter", "launch_or_details", "Open", show=False, priority=False),
+        Binding("s", "session_browser", "Sessions", show=False),
     ]
 
     node_procs: list[NodeProcess] = []
@@ -255,6 +270,7 @@ class DevDashApp(App):
     system_stats: SystemStats | None = None
     claude_instances: list[ClaudeInstance] = []
     claude_projects: list[ClaudeProject] = []
+    claude_stats: ClaudeStats | None = None
     _current_tab: str = "dev"
     _active_table_id: str = "node-table"
     _sort_state: dict[str, tuple[int, bool]] = {}  # table_id -> (col_index, reverse)
@@ -295,6 +311,7 @@ class DevDashApp(App):
                 yield Static(" All Processes (by memory)", id="procs-header", classes="section-header active")
                 yield DataTable(id="all-procs-table")
             with TabPane("[3] Claude", id="claude"):
+                yield Static("", id="claude-stats-bar")
                 yield Static(" Running Instances", id="claude-instances-header", classes="section-header active")
                 yield DataTable(id="claude-instances-table")
                 yield Static(" Projects", id="claude-projects-header", classes="section-header")
@@ -525,7 +542,8 @@ class DevDashApp(App):
         stats = get_system_stats()
         claude_instances = get_claude_instances()
         claude_projects = get_claude_projects()
-        self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats, claude_instances, claude_projects)
+        claude_stats = get_claude_stats()
+        self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats, claude_instances, claude_projects, claude_stats)
 
     def _update_all(
         self,
@@ -535,6 +553,7 @@ class DevDashApp(App):
         stats: SystemStats,
         claude_instances: list[ClaudeInstance] | None = None,
         claude_projects: list[ClaudeProject] | None = None,
+        claude_stats: ClaudeStats | None = None,
     ) -> None:
         self._check_notifications(node_procs, docker_containers)
 
@@ -546,10 +565,13 @@ class DevDashApp(App):
             self.claude_instances = claude_instances
         if claude_projects is not None:
             self.claude_projects = claude_projects
+        if claude_stats is not None:
+            self.claude_stats = claude_stats
 
         self._update_dev_tables(node_procs, docker_containers)
         self._update_system_tab(all_procs, stats)
         self._update_claude_tab(self.claude_instances, self.claude_projects)
+        self._update_claude_stats_bar(self.claude_stats)
 
         status = self.query_one("#status-bar", StatusBar)
         cpu = f"CPU {stats.cpu_percent:.0f}%"
@@ -802,63 +824,176 @@ class DevDashApp(App):
             return path
         return None
 
-    def action_launch_claude(self) -> None:
-        path = self._get_claude_selected_path()
-        if not path:
-            return
-        import subprocess
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        table_id = event.data_table.id or ""
+        if table_id == "claude-projects-table":
+            path = event.row_key.value
+            if path:
+                self._open_launch_menu(path)
+        elif table_id == "claude-instances-table":
+            try:
+                pid = int(event.row_key.value)
+            except ValueError:
+                return
+            inst = next((i for i in self.claude_instances if i.pid == pid), None)
+            if not inst:
+                return
+            path = inst.cwd
+            if path.startswith("~"):
+                path = str(Path.home()) + path[1:]
+            self._open_launch_menu(path)
+
+    def action_launch_or_details(self) -> None:
+        if self._current_tab == "claude":
+            path = self._get_claude_selected_path()
+            if path:
+                self._open_launch_menu(path)
+        else:
+            self.action_details()
+
+    def _open_launch_menu(self, path: str) -> None:
         name = Path(path).name
-        script = f'cd {_shell_quote(path)} && claude'
-        try:
-            subprocess.Popen(["osascript", "-e",
-                f'tell application "Terminal" to do script "{script}"'])
-            self.notify(f"Launching claude in {name}", timeout=3)
-        except Exception as e:
-            self.notify(f"Failed to launch: {e}", severity="error", timeout=5)
+        self.push_screen(
+            LaunchMenuScreen(name),
+            callback=lambda action: self._on_launch_menu_selected(action, path),
+        )
 
-    def _resume_claude(self) -> None:
-        path = self._get_claude_selected_path()
-        if not path:
+    def _on_launch_menu_selected(self, action: str | None, path: str) -> None:
+        if not action:
             return
-        import subprocess
+        import subprocess as sp
         name = Path(path).name
-        script = f'cd {_shell_quote(path)} && claude --resume'
+
+        if action == "vscode":
+            try:
+                sp.Popen(["code", path])
+                self.notify(f"Opening {name} in VS Code", timeout=3)
+            except Exception as e:
+                self.notify(f"Failed: {e}", severity="error", timeout=5)
+            return
+
+        if action == "finder":
+            try:
+                sp.Popen(["open", path])
+                self.notify(f"Opening {name} in Finder", timeout=3)
+            except Exception as e:
+                self.notify(f"Failed: {e}", severity="error", timeout=5)
+            return
+
+        cmd_map = {
+            "new": "claude",
+            "new_skip_perms": "claude --dangerously-skip-permissions",
+            "new_plan": "claude --permission-mode plan",
+            "continue_session": "claude --continue",
+            "resume": "claude --resume",
+        }
+        cmd = cmd_map.get(action)
+        if not cmd:
+            return
+        script = f'cd {_shell_quote(path)} && {cmd}'
         try:
-            subprocess.Popen(["osascript", "-e",
+            sp.Popen(["osascript", "-e",
                 f'tell application "Terminal" to do script "{script}"'])
-            self.notify(f"Resuming claude in {name}", timeout=3)
+            self.notify(f"{cmd} in {name}", timeout=3)
         except Exception as e:
-            self.notify(f"Failed to resume: {e}", severity="error", timeout=5)
+            self.notify(f"Failed: {e}", severity="error", timeout=5)
 
-    def action_open_in_finder(self) -> None:
+    def action_session_browser(self) -> None:
+        if self._current_tab != "claude" or self._active_table_id != "claude-projects-table":
+            return
         path = self._get_claude_selected_path()
         if not path:
             return
-        import subprocess
-        try:
-            subprocess.Popen(["open", path])
-            self.notify(f"Opening {Path(path).name} in Finder", timeout=3)
-        except Exception as e:
-            self.notify(f"Failed to open: {e}", severity="error", timeout=5)
+        name = Path(path).name
+        self.push_screen(
+            SessionBrowserScreen(path, name),
+            callback=lambda session_id: self._on_session_selected(session_id, path),
+        )
 
-    def action_open_in_vscode(self) -> None:
-        path = self._get_claude_selected_path()
-        if not path:
+    def _on_session_selected(self, session_id: str | None, path: str) -> None:
+        if not session_id:
             return
-        import subprocess
+        import subprocess as sp
+        name = Path(path).name
+        script = f'cd {_shell_quote(path)} && claude --resume {session_id}'
         try:
-            subprocess.Popen(["code", path])
-            self.notify(f"Opening {Path(path).name} in VS Code", timeout=3)
+            sp.Popen(["osascript", "-e",
+                f'tell application "Terminal" to do script "{script}"'])
+            self.notify(f"Resuming session in {name}", timeout=3)
         except Exception as e:
-            self.notify(f"Failed to open: {e}", severity="error", timeout=5)
+            self.notify(f"Failed: {e}", severity="error", timeout=5)
 
     def action_refresh(self) -> None:
-        if self._current_tab == "claude":
-            self._resume_claude()
-            return
         status = self.query_one("#status-bar", StatusBar)
         status.message = " Refreshing..."
         self.load_data()
+
+    @staticmethod
+    def _build_sparkline(values: list[int], width: int | None = None) -> str:
+        blocks = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+        if not values:
+            return ""
+        if width and len(values) < width:
+            values = [0] * (width - len(values)) + values
+        max_val = max(values) if values else 1
+        if max_val == 0:
+            return blocks[0] * len(values)
+        return "".join(
+            blocks[min(int(v / max_val * 7) + (1 if v > 0 else 0), 8)]
+            for v in values
+        )
+
+    @staticmethod
+    def _build_hour_bar(hour_counts: dict[int, int]) -> str:
+        blocks = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+        values = [hour_counts.get(h, 0) for h in range(24)]
+        max_val = max(values) if values else 1
+        if max_val == 0:
+            return blocks[0] * 24
+        return "".join(
+            blocks[min(int(v / max_val * 7) + (1 if v > 0 else 0), 8)]
+            for v in values
+        )
+
+    def _format_tokens(self, n: int) -> str:
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n / 1_000:.0f}k"
+        return str(n)
+
+    def _update_claude_stats_bar(self, stats: ClaudeStats | None) -> None:
+        bar = self.query_one("#claude-stats-bar", Static)
+        if not stats:
+            bar.update("")
+            return
+
+        total_tokens = sum(
+            inp + out + cache for inp, out, cache in stats.model_usage.values()
+        )
+        line1 = (
+            f"  Sessions: {stats.total_sessions}  "
+            f"Messages: {stats.total_messages}  "
+            f"Tokens: {self._format_tokens(total_tokens)}"
+        )
+
+        model_parts = []
+        for model, (inp, out, cache) in sorted(
+            stats.model_usage.items(),
+            key=lambda x: sum(x[1]),
+            reverse=True,
+        ):
+            short_name = model.replace("claude-", "")
+            total = inp + out + cache
+            model_parts.append(f"{short_name}: {self._format_tokens(total)}")
+        line2 = "  " + "  ".join(model_parts) if model_parts else ""
+
+        daily_values = [count for _, count in stats.daily_activity]
+        sparkline = self._build_sparkline(daily_values, width=14)
+        hour_bar = self._build_hour_bar(stats.hour_counts)
+        line3 = f"  14d activity: {sparkline}   Hour (0-23): {hour_bar}"
+
+        bar.update(f"{line1}\n{line2}\n{line3}")
 
     def action_toggle_select(self) -> None:
         table = self.query_one(f"#{self._active_table_id}", DataTable)
@@ -972,6 +1107,12 @@ class DevDashApp(App):
     def action_details(self) -> None:
         if self._active_table_id == "docker-table":
             self.notify("Details not available for Docker containers", severity="warning")
+            return
+        if self._active_table_id == "claude-projects-table":
+            path = self._get_claude_selected_path()
+            if path:
+                name = Path(path).name
+                self.push_screen(ClaudeProjectDetailScreen(path, name))
             return
         table_id = self._active_table_id
         table = self.query_one(f"#{table_id}", DataTable)
