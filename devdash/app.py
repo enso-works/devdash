@@ -50,12 +50,12 @@ from devdash.processes import (
 import dataclasses
 import json
 import re
+import shlex
+import shutil
 import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-
-import shlex
 
 _color_low = 50.0
 _color_high = 80.0
@@ -101,13 +101,10 @@ class StatusBar(Static):
 
 class DevDashCommands(Provider):
     def _get_commands(self) -> list[tuple[str, str, str]]:
-        return [
+        cmds = [
             ("Refresh data", "Reload all process and system data", "action_refresh"),
             ("Switch to Dev tab", "Show node processes and docker containers", "action_tab_dev"),
             ("Switch to System tab", "Show all processes and system stats", "action_tab_system"),
-            ("Switch to Claude tab", "Show Claude Code instances and projects", "action_tab_claude"),
-            ("Launch menu", "Open launch menu for selected project", "action_launch_or_details"),
-            ("Session browser", "Browse sessions for selected project", "action_session_browser"),
             ("Toggle filter", "Show/hide the process filter bar", "action_toggle_filter"),
             ("Kill/Stop selected", "Kill the selected process or stop container", "action_kill"),
             ("View logs", "View Docker container logs", "action_logs"),
@@ -116,6 +113,14 @@ class DevDashCommands(Provider):
             ("Toggle selection", "Select/deselect current row", "action_toggle_select"),
             ("Quit", "Exit devdash", "action_quit"),
         ]
+        app = self.app
+        if isinstance(app, DevDashApp) and app._has_claude:
+            cmds.extend([
+                ("Switch to Claude tab", "Show Claude Code instances and projects", "action_tab_claude"),
+                ("Launch menu", "Open launch menu for selected project", "action_launch_or_details"),
+                ("Session browser", "Browse sessions for selected project", "action_session_browser"),
+            ])
+        return cmds
 
     def _make_callback(self, action: str):
         def callback() -> None:
@@ -292,6 +297,10 @@ class DevDashApp(App):
         self._config = config or Config()
         self._update_check_event = update_check_event
         self._get_update_message = get_update_message
+        self._has_claude = (
+            shutil.which("claude") is not None
+            or (Path.home() / ".claude").is_dir()
+        )
         global _color_low, _color_high
         _color_low = self._config.color_threshold_low
         _color_high = self._config.color_threshold_high
@@ -310,12 +319,13 @@ class DevDashApp(App):
                 yield Static("", id="sys-stats")
                 yield Static(" All Processes (by memory)", id="procs-header", classes="section-header active")
                 yield DataTable(id="all-procs-table")
-            with TabPane("[3] Claude", id="claude"):
-                yield Static("", id="claude-stats-bar")
-                yield Static(" Running Instances", id="claude-instances-header", classes="section-header active")
-                yield DataTable(id="claude-instances-table")
-                yield Static(" Projects", id="claude-projects-header", classes="section-header")
-                yield DataTable(id="claude-projects-table")
+            if self._has_claude:
+                with TabPane("[3] Claude", id="claude"):
+                    yield Static("", id="claude-stats-bar")
+                    yield Static(" Running Instances", id="claude-instances-header", classes="section-header active")
+                    yield DataTable(id="claude-instances-table")
+                    yield Static(" Projects", id="claude-projects-header", classes="section-header")
+                    yield DataTable(id="claude-projects-table")
         yield StatusBar("Loading...", id="status-bar")
         yield Footer()
 
@@ -332,13 +342,14 @@ class DevDashApp(App):
         all_table.cursor_type = "row"
         all_table.add_columns("PID", "Name", "CPU %", "Memory", "Mem %", "User", "Status", "Command")
 
-        claude_inst_table = self.query_one("#claude-instances-table", DataTable)
-        claude_inst_table.cursor_type = "row"
-        claude_inst_table.add_columns("PID", "Project", "TTY", "Memory", "CPU", "Uptime", "Directory")
+        if self._has_claude:
+            claude_inst_table = self.query_one("#claude-instances-table", DataTable)
+            claude_inst_table.cursor_type = "row"
+            claude_inst_table.add_columns("PID", "Project", "TTY", "Memory", "CPU", "Uptime", "Directory")
 
-        claude_proj_table = self.query_one("#claude-projects-table", DataTable)
-        claude_proj_table.cursor_type = "row"
-        claude_proj_table.add_columns("Project", "Sessions", "Messages", "Last Active", "Status", "Path")
+            claude_proj_table = self.query_one("#claude-projects-table", DataTable)
+            claude_proj_table.cursor_type = "row"
+            claude_proj_table.add_columns("Project", "Sessions", "Messages", "Last Active", "Status", "Path")
 
         self._highlight_active_table()
         self.load_data()
@@ -400,6 +411,8 @@ class DevDashApp(App):
         self._highlight_active_table()
 
     def action_tab_claude(self) -> None:
+        if not self._has_claude:
+            return
         tabs = self.query_one("#tabs", TabbedContent)
         tabs.active = "claude"
         self._current_tab = "claude"
@@ -478,7 +491,8 @@ class DevDashApp(App):
             self._update_dev_tables(self.node_procs, self.docker_containers)
         if self.all_procs and self.system_stats:
             self._update_system_tab(self.all_procs, self.system_stats)
-        self._update_claude_tab(self.claude_instances, self.claude_projects)
+        if self._has_claude:
+            self._update_claude_tab(self.claude_instances, self.claude_projects)
 
     @staticmethod
     def _parse_sort_value(cell: object) -> object:
@@ -540,9 +554,13 @@ class DevDashApp(App):
         docker_containers = get_docker_containers()
         all_procs = get_all_processes(limit=self._config.process_limit)
         stats = get_system_stats()
-        claude_instances = get_claude_instances()
-        claude_projects = get_claude_projects()
-        claude_stats = get_claude_stats()
+        claude_instances = None
+        claude_projects = None
+        claude_stats = None
+        if self._has_claude:
+            claude_instances = get_claude_instances()
+            claude_projects = get_claude_projects()
+            claude_stats = get_claude_stats()
         self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats, claude_instances, claude_projects, claude_stats)
 
     def _update_all(
@@ -570,15 +588,19 @@ class DevDashApp(App):
 
         self._update_dev_tables(node_procs, docker_containers)
         self._update_system_tab(all_procs, stats)
-        self._update_claude_tab(self.claude_instances, self.claude_projects)
-        self._update_claude_stats_bar(self.claude_stats)
+        if self._has_claude:
+            self._update_claude_tab(self.claude_instances, self.claude_projects)
+            self._update_claude_stats_bar(self.claude_stats)
 
         status = self.query_one("#status-bar", StatusBar)
         cpu = f"CPU {stats.cpu_percent:.0f}%"
         mem = f"Mem {stats.memory_used_gb:.1f}/{stats.memory_total_gb:.1f}GB"
         disk = f"Disk {stats.disk_percent:.0f}%"
-        claude_count = len(self.claude_instances)
-        status.message = f" {cpu} | {mem} | {disk} | {len(node_procs)} node | {len(docker_containers)} docker | {claude_count} claude | 1/2/3=tabs q=quit"
+        parts = f" {cpu} | {mem} | {disk} | {len(node_procs)} node | {len(docker_containers)} docker"
+        if self._has_claude:
+            parts += f" | {len(self.claude_instances)} claude"
+        tabs_hint = "1/2/3=tabs" if self._has_claude else "1/2=tabs"
+        status.message = f"{parts} | {tabs_hint} q=quit"
 
     def _check_notifications(
         self,
