@@ -43,23 +43,29 @@ Press `/` to filter across all columns. Matches persist across auto-refresh.
 
 ## Install
 
-Requires Python 3.10+.
+Requires Python 3.10+ and git.
 
 ```sh
-pip install .
+curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | bash
 ```
 
-Or run directly from the repo:
+This clones to `~/.devdash`, creates a virtualenv, and symlinks the binary to `~/.local/bin/devdash`.
 
-```sh
-./run.sh
-```
+Running the installer again will update an existing installation (idempotent).
 
 ## Usage
 
 ```sh
 devdash                          # launch with defaults
 devdash --config path/to/config  # use custom config file
+devdash --version                # print version
+devdash --update                 # pull latest and reinstall
+```
+
+## Uninstall
+
+```sh
+rm -rf ~/.devdash ~/.local/bin/devdash
 ```
 
 ## Keybindings
@@ -139,12 +145,14 @@ devdash --config ~/my-config.toml
 
 ```
 devdash/
-  __init__.py
+  __init__.py   # version constant
   app.py        # main TUI app, layout, bindings, data flow
   cli.py        # entry point with argparse
   config.py     # config file loading (tomllib)
   processes.py  # process discovery, docker queries, system stats
   screens.py    # modal screens (confirm, log viewer, process details)
+  updater.py    # git-based self-update logic
+install.sh      # one-line installer
 pyproject.toml  # package metadata and dependencies
 run.sh          # convenience launcher
 ```
