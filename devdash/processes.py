@@ -2,9 +2,36 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import psutil
+
+_project_name_cache: dict[str, str] = {}
+
+
+def _find_project_name(cwd: str) -> str:
+    if not cwd:
+        return ""
+    if cwd in _project_name_cache:
+        return _project_name_cache[cwd]
+    try:
+        path = Path(cwd).resolve()
+        for directory in [path, *path.parents]:
+            pkg = directory / "package.json"
+            if pkg.is_file():
+                try:
+                    data = json.loads(pkg.read_text(encoding="utf-8"))
+                    name = data.get("name", "")
+                    _project_name_cache[cwd] = name
+                    return name
+                except (json.JSONDecodeError, OSError):
+                    break
+    except Exception:
+        pass
+    _project_name_cache[cwd] = ""
+    return ""
 
 
 @dataclass
@@ -17,6 +44,7 @@ class NodeProcess:
     cwd: str
     ports: list[int] = field(default_factory=list)
     uptime: str = ""
+    project: str = ""
 
 
 @dataclass
@@ -27,6 +55,8 @@ class DockerContainer:
     status: str
     ports: str
     created: str
+    compose_project: str = ""
+    compose_service: str = ""
 
 
 def _format_uptime(seconds: float) -> str:
@@ -108,6 +138,7 @@ def get_node_processes() -> list[NodeProcess]:
                 mem = 0.0
 
             ports = _get_process_ports(pid)
+            project = _find_project_name(cwd)
 
             results.append(NodeProcess(
                 pid=pid,
@@ -118,6 +149,7 @@ def get_node_processes() -> list[NodeProcess]:
                 cwd=_shorten_cwd(cwd),
                 ports=ports,
                 uptime=_format_uptime(uptime),
+                project=project,
             ))
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
@@ -131,7 +163,7 @@ def get_docker_containers() -> list[DockerContainer]:
         result = subprocess.run(
             [
                 "docker", "ps", "--format",
-                '{"id":"{{.ID}}","name":"{{.Names}}","image":"{{.Image}}","status":"{{.Status}}","ports":"{{.Ports}}","created":"{{.RunningFor}}"}'
+                '{"id":"{{.ID}}","name":"{{.Names}}","image":"{{.Image}}","status":"{{.Status}}","ports":"{{.Ports}}","created":"{{.RunningFor}}","labels":"{{.Labels}}"}'
             ],
             capture_output=True,
             text=True,
@@ -151,6 +183,13 @@ def get_docker_containers() -> list[DockerContainer]:
             ports = data.get("ports", "")
             if len(ports) > 60:
                 ports = ports[:57] + "..."
+            labels_str = data.get("labels", "")
+            labels = {}
+            if labels_str:
+                for part in labels_str.split(","):
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        labels[k.strip()] = v.strip()
             containers.append(DockerContainer(
                 container_id=data["id"],
                 name=data["name"],
@@ -158,10 +197,13 @@ def get_docker_containers() -> list[DockerContainer]:
                 status=data["status"],
                 ports=ports,
                 created=data["created"],
+                compose_project=labels.get("com.docker.compose.project", ""),
+                compose_service=labels.get("com.docker.compose.service", ""),
             ))
         except (json.JSONDecodeError, KeyError):
             continue
 
+    containers.sort(key=lambda c: (c.compose_project, c.compose_service, c.name))
     return containers
 
 
@@ -205,6 +247,11 @@ class SystemStats:
     disk_used_gb: float
     disk_free_gb: float
     disk_percent: float
+    net_sent_per_sec: float | None = None
+    net_recv_per_sec: float | None = None
+
+
+_prev_net: tuple[float, float, float] | None = None  # (time, bytes_sent, bytes_recv)
 
 
 @dataclass
@@ -219,12 +266,35 @@ class GeneralProcess:
     command: str
 
 
+def _format_bytes_rate(bps: float) -> str:
+    if bps < 1024:
+        return f"{bps:.0f} B/s"
+    if bps < 1024 * 1024:
+        return f"{bps / 1024:.1f} KB/s"
+    return f"{bps / (1024 * 1024):.1f} MB/s"
+
+
 def get_system_stats() -> SystemStats:
+    global _prev_net
     cpu = psutil.cpu_percent(interval=0)
     cpu_count = psutil.cpu_count() or 1
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
     disk = psutil.disk_usage("/")
+
+    net_sent_ps: float | None = None
+    net_recv_ps: float | None = None
+    try:
+        net = psutil.net_io_counters()
+        now = time.monotonic()
+        if _prev_net is not None:
+            dt = now - _prev_net[0]
+            if dt > 0:
+                net_sent_ps = (net.bytes_sent - _prev_net[1]) / dt
+                net_recv_ps = (net.bytes_recv - _prev_net[2]) / dt
+        _prev_net = (now, net.bytes_sent, net.bytes_recv)
+    except Exception:
+        pass
 
     return SystemStats(
         cpu_percent=cpu,
@@ -239,6 +309,8 @@ def get_system_stats() -> SystemStats:
         disk_used_gb=disk.used / (1024 ** 3),
         disk_free_gb=disk.free / (1024 ** 3),
         disk_percent=disk.percent,
+        net_sent_per_sec=net_sent_ps,
+        net_recv_per_sec=net_recv_ps,
     )
 
 
