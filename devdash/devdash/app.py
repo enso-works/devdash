@@ -3,20 +3,41 @@ from __future__ import annotations
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical, Center
 from textual.reactive import reactive
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Label,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from devdash.processes import (
     DockerContainer,
+    GeneralProcess,
     NodeProcess,
+    SystemStats,
+    get_all_processes,
     get_docker_containers,
     get_node_processes,
+    get_system_stats,
     kill_node_process,
+    kill_process,
     stop_docker_container,
 )
 
 REFRESH_INTERVAL = 3.0
+
+
+def _bar(percent: float, width: int = 20) -> str:
+    filled = int(percent / 100 * width)
+    empty = width - filled
+    return f"[{'|' * filled}{' ' * empty}] {percent:.1f}%"
 
 
 class StatusBar(Static):
@@ -32,31 +53,25 @@ class DevDashApp(App):
         layout: vertical;
     }
 
-    #node-header {
+    .section-header {
         height: 1;
-        background: $primary-darken-2;
+        background: grey;
         color: $text;
         padding: 0 1;
         text-style: bold;
     }
 
-    #docker-header {
-        height: 1;
-        background: $primary-darken-2;
-        color: $text;
-        padding: 0 1;
-        text-style: bold;
-        margin-top: 1;
+    .section-header.active {
+        background: dodgerblue;
     }
 
-    #node-table {
+    #node-table, #docker-table {
         height: 1fr;
         min-height: 5;
     }
 
-    #docker-table {
+    #all-procs-table {
         height: 1fr;
-        min-height: 5;
     }
 
     #status-bar {
@@ -74,6 +89,42 @@ class DevDashApp(App):
         background: $accent;
         color: $text;
     }
+
+    #sys-stats {
+        height: auto;
+        max-height: 6;
+        padding: 0 1;
+        background: $surface;
+    }
+
+    .stat-row {
+        height: 1;
+        padding: 0 1;
+    }
+
+    .stat-label {
+        width: 10;
+        text-style: bold;
+        color: $text-muted;
+    }
+
+    .stat-bar {
+        width: 1fr;
+    }
+
+    #stats-grid {
+        layout: grid;
+        grid-size: 2 2;
+        grid-gutter: 0 2;
+        height: auto;
+        padding: 0 1;
+        background: $surface;
+        margin-bottom: 1;
+    }
+
+    .stat-cell {
+        height: 1;
+    }
     """
 
     TITLE = "devdash"
@@ -81,20 +132,30 @@ class DevDashApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("k", "kill", "Kill/Stop"),
-        Binding("tab", "switch_panel", "Switch Panel"),
+        Binding("tab", "focus_next_table", "Next Table", show=True),
+        Binding("1", "tab_dev", "Dev Tab"),
+        Binding("2", "tab_system", "System Tab"),
     ]
 
-    active_panel: reactive[str] = reactive("node")
     node_procs: list[NodeProcess] = []
     docker_containers: list[DockerContainer] = []
+    all_procs: list[GeneralProcess] = []
+    system_stats: SystemStats | None = None
+    _current_tab: str = "dev"
+    _active_table_id: str = "node-table"
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Vertical():
-            yield Static(" Node Processes", id="node-header")
-            yield DataTable(id="node-table")
-            yield Static(" Docker Containers", id="docker-header")
-            yield DataTable(id="docker-table")
+        with TabbedContent(id="tabs"):
+            with TabPane("[1] Dev", id="dev"):
+                yield Static(" Node Processes", id="node-header", classes="section-header active")
+                yield DataTable(id="node-table")
+                yield Static(" Docker Containers", id="docker-header", classes="section-header")
+                yield DataTable(id="docker-table")
+            with TabPane("[2] System", id="system"):
+                yield Static("", id="sys-stats")
+                yield Static(" All Processes (by memory)", id="procs-header", classes="section-header active")
+                yield DataTable(id="all-procs-table")
         yield StatusBar("Loading...", id="status-bar")
         yield Footer()
 
@@ -107,46 +168,100 @@ class DevDashApp(App):
         docker_table.cursor_type = "row"
         docker_table.add_columns("ID", "Name", "Image", "Status", "Ports", "Running For")
 
-        self._highlight_active_panel()
+        all_table = self.query_one("#all-procs-table", DataTable)
+        all_table.cursor_type = "row"
+        all_table.add_columns("PID", "Name", "CPU %", "Memory", "Mem %", "User", "Status", "Command")
+
+        self._highlight_active_table()
         self.load_data()
         self.set_interval(REFRESH_INTERVAL, self.load_data)
 
-    def _highlight_active_panel(self) -> None:
-        node_header = self.query_one("#node-header", Static)
-        docker_header = self.query_one("#docker-header", Static)
-        node_table = self.query_one("#node-table", DataTable)
-        docker_table = self.query_one("#docker-table", DataTable)
+    def _highlight_active_table(self) -> None:
+        table_header_map = {
+            "node-table": "node-header",
+            "docker-table": "docker-header",
+            "all-procs-table": "procs-header",
+        }
+        for table_id, header_id in table_header_map.items():
+            try:
+                header = self.query_one(f"#{header_id}", Static)
+                if table_id == self._active_table_id:
+                    header.add_class("active")
+                    header.styles.background = "dodgerblue"
+                else:
+                    header.remove_class("active")
+                    header.styles.background = "grey"
+            except Exception:
+                pass
 
-        if self.active_panel == "node":
-            node_header.styles.background = "dodgerblue"
-            docker_header.styles.background = "grey"
-            node_table.focus()
-        else:
-            node_header.styles.background = "grey"
-            docker_header.styles.background = "dodgerblue"
-            docker_table.focus()
-
-    def watch_active_panel(self, value: str) -> None:
         try:
-            self._highlight_active_panel()
+            self.query_one(f"#{self._active_table_id}", DataTable).focus()
         except Exception:
             pass
 
-    def action_switch_panel(self) -> None:
-        self.active_panel = "docker" if self.active_panel == "node" else "node"
+    def action_tab_dev(self) -> None:
+        tabs = self.query_one("#tabs", TabbedContent)
+        tabs.active = "dev"
+        self._current_tab = "dev"
+        self._active_table_id = "node-table"
+        self._highlight_active_table()
+
+    def action_tab_system(self) -> None:
+        tabs = self.query_one("#tabs", TabbedContent)
+        tabs.active = "system"
+        self._current_tab = "system"
+        self._active_table_id = "all-procs-table"
+        self._highlight_active_table()
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        tab_id = event.pane.id or ""
+        self._current_tab = tab_id
+        if tab_id == "dev":
+            self._active_table_id = "node-table"
+        else:
+            self._active_table_id = "all-procs-table"
+        self._highlight_active_table()
+
+    def action_focus_next_table(self) -> None:
+        if self._current_tab == "dev":
+            if self._active_table_id == "node-table":
+                self._active_table_id = "docker-table"
+            else:
+                self._active_table_id = "node-table"
+        self._highlight_active_table()
 
     @work(thread=True, exclusive=True, group="loader")
     def load_data(self) -> None:
         node_procs = get_node_processes()
         docker_containers = get_docker_containers()
-        self.call_from_thread(self._update_tables, node_procs, docker_containers)
+        all_procs = get_all_processes()
+        stats = get_system_stats()
+        self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats)
 
-    def _update_tables(
-        self, node_procs: list[NodeProcess], docker_containers: list[DockerContainer]
+    def _update_all(
+        self,
+        node_procs: list[NodeProcess],
+        docker_containers: list[DockerContainer],
+        all_procs: list[GeneralProcess],
+        stats: SystemStats,
     ) -> None:
         self.node_procs = node_procs
         self.docker_containers = docker_containers
+        self.all_procs = all_procs
+        self.system_stats = stats
 
+        self._update_dev_tables(node_procs, docker_containers)
+        self._update_system_tab(all_procs, stats)
+
+        status = self.query_one("#status-bar", StatusBar)
+        cpu = f"CPU {stats.cpu_percent:.0f}%"
+        mem = f"Mem {stats.memory_used_gb:.1f}/{stats.memory_total_gb:.1f}GB"
+        disk = f"Disk {stats.disk_percent:.0f}%"
+        status.message = f" {cpu} | {mem} | {disk} | {len(node_procs)} node | {len(docker_containers)} docker | 1/2=tabs r=refresh k=kill q=quit"
+
+    def _update_dev_tables(
+        self, node_procs: list[NodeProcess], docker_containers: list[DockerContainer]
+    ) -> None:
         node_table = self.query_one("#node-table", DataTable)
         docker_table = self.query_one("#docker-table", DataTable)
 
@@ -190,13 +305,46 @@ class DevDashApp(App):
             except Exception:
                 pass
 
-        status = self.query_one("#status-bar", StatusBar)
-        status.message = f" {len(node_procs)} node process(es) | {len(docker_containers)} docker container(s) | r=refresh k=kill tab=switch q=quit"
-
         node_header = self.query_one("#node-header", Static)
         node_header.update(f" Node Processes ({len(node_procs)})")
         docker_header = self.query_one("#docker-header", Static)
         docker_header.update(f" Docker Containers ({len(docker_containers)})")
+
+    def _update_system_tab(self, all_procs: list[GeneralProcess], stats: SystemStats) -> None:
+        sys_widget = self.query_one("#sys-stats", Static)
+        lines = [
+            f"  CPU   {_bar(stats.cpu_percent, 30)}   ({stats.cpu_count} cores)",
+            f"  Mem   {_bar(stats.memory_percent, 30)}   {stats.memory_used_gb:.1f} / {stats.memory_total_gb:.1f} GB",
+            f"  Swap  {_bar(stats.swap_percent, 30)}   {stats.swap_used_gb:.1f} / {stats.swap_total_gb:.1f} GB",
+            f"  Disk  {_bar(stats.disk_percent, 30)}   {stats.disk_used_gb:.0f} / {stats.disk_total_gb:.0f} GB  ({stats.disk_free_gb:.0f} GB free)",
+        ]
+        sys_widget.update("\n".join(lines))
+
+        table = self.query_one("#all-procs-table", DataTable)
+        cursor = table.cursor_row
+
+        table.clear()
+        for proc in all_procs:
+            table.add_row(
+                str(proc.pid),
+                proc.name,
+                f"{proc.cpu_percent:.1f}",
+                f"{proc.memory_mb:.0f} MB",
+                f"{proc.memory_percent:.1f}%",
+                proc.user,
+                proc.status,
+                proc.command,
+                key=str(proc.pid),
+            )
+
+        if all_procs and cursor is not None:
+            try:
+                table.move_cursor(row=min(cursor, len(all_procs) - 1))
+            except Exception:
+                pass
+
+        procs_header = self.query_one("#procs-header", Static)
+        procs_header.update(f" All Processes ({len(all_procs)}, by memory)")
 
     def action_refresh(self) -> None:
         status = self.query_one("#status-bar", StatusBar)
@@ -204,20 +352,19 @@ class DevDashApp(App):
         self.load_data()
 
     def action_kill(self) -> None:
-        if self.active_panel == "node":
+        if self._active_table_id == "node-table":
             self._kill_node()
-        else:
+        elif self._active_table_id == "docker-table":
             self._stop_docker()
+        elif self._active_table_id == "all-procs-table":
+            self._kill_general()
 
     def _kill_node(self) -> None:
         node_table = self.query_one("#node-table", DataTable)
         if not self.node_procs:
             return
-
         try:
-            row_key, _ = node_table.coordinate_to_cell_key(
-                node_table.cursor_coordinate
-            )
+            row_key, _ = node_table.coordinate_to_cell_key(node_table.cursor_coordinate)
             pid = int(row_key.value)
         except Exception:
             return
@@ -239,11 +386,8 @@ class DevDashApp(App):
         docker_table = self.query_one("#docker-table", DataTable)
         if not self.docker_containers:
             return
-
         try:
-            row_key, _ = docker_table.coordinate_to_cell_key(
-                docker_table.cursor_coordinate
-            )
+            row_key, _ = docker_table.coordinate_to_cell_key(docker_table.cursor_coordinate)
             container_id = row_key.value
         except Exception:
             return
@@ -259,6 +403,25 @@ class DevDashApp(App):
             callback=lambda confirmed: self._on_stop_confirmed(confirmed, container_id, container.name),
         )
 
+    def _kill_general(self) -> None:
+        table = self.query_one("#all-procs-table", DataTable)
+        if not self.all_procs:
+            return
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            pid = int(row_key.value)
+        except Exception:
+            return
+
+        proc = next((p for p in self.all_procs if p.pid == pid), None)
+        if not proc:
+            return
+
+        self.push_screen(
+            ConfirmScreen(f"Kill process '{proc.name}' (PID {pid}, {proc.memory_mb:.0f} MB)?"),
+            callback=lambda confirmed: self._on_general_kill_confirmed(confirmed, pid, proc.name),
+        )
+
     @work(thread=True)
     def _on_kill_confirmed(self, confirmed: bool, pid: int) -> None:
         if not confirmed:
@@ -266,10 +429,8 @@ class DevDashApp(App):
         status = self.query_one("#status-bar", StatusBar)
         self.call_from_thread(setattr, status, "message", f" Killing PID {pid}...")
         success = kill_node_process(pid)
-        if success:
-            self.call_from_thread(setattr, status, "message", f" Killed PID {pid}")
-        else:
-            self.call_from_thread(setattr, status, "message", f" Failed to kill PID {pid}")
+        msg = f" Killed PID {pid}" if success else f" Failed to kill PID {pid}"
+        self.call_from_thread(setattr, status, "message", msg)
         self.call_from_thread(self.load_data)
 
     @work(thread=True)
@@ -279,16 +440,20 @@ class DevDashApp(App):
         status = self.query_one("#status-bar", StatusBar)
         self.call_from_thread(setattr, status, "message", f" Stopping '{name}'...")
         success = stop_docker_container(container_id)
-        if success:
-            self.call_from_thread(setattr, status, "message", f" Stopped '{name}'")
-        else:
-            self.call_from_thread(setattr, status, "message", f" Failed to stop '{name}'")
+        msg = f" Stopped '{name}'" if success else f" Failed to stop '{name}'"
+        self.call_from_thread(setattr, status, "message", msg)
         self.call_from_thread(self.load_data)
 
-
-from textual.screen import ModalScreen
-from textual.widgets import Button, Label
-from textual.containers import Horizontal, Center
+    @work(thread=True)
+    def _on_general_kill_confirmed(self, confirmed: bool, pid: int, name: str) -> None:
+        if not confirmed:
+            return
+        status = self.query_one("#status-bar", StatusBar)
+        self.call_from_thread(setattr, status, "message", f" Killing '{name}' (PID {pid})...")
+        success = kill_process(pid)
+        msg = f" Killed '{name}'" if success else f" Failed to kill '{name}'"
+        self.call_from_thread(setattr, status, "message", msg)
+        self.call_from_thread(self.load_data)
 
 
 class ConfirmScreen(ModalScreen[bool]):
