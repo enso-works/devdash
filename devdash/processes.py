@@ -4,6 +4,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psutil
@@ -543,3 +544,176 @@ def get_claude_projects() -> list[ClaudeProject]:
         reverse=True,
     )
     return results
+
+
+@dataclass
+class ClaudeSessionEntry:
+    session_id: str
+    summary: str
+    first_prompt: str
+    message_count: int
+    git_branch: str
+    created: str
+    modified: str
+    project_path: str
+    is_sidechain: bool
+
+
+@dataclass
+class ClaudeStats:
+    total_sessions: int
+    total_messages: int
+    model_usage: dict[str, tuple[int, int, int]]  # model -> (input, output, cache_read)
+    daily_activity: list[tuple[str, int]]  # last 14 days: (date, message_count)
+    hour_counts: dict[int, int]  # hour 0-23 -> count
+
+
+@dataclass
+class ClaudeProjectDetail:
+    project_path: str
+    name: str
+    total_sessions: int
+    total_messages: int
+    total_lines_added: int
+    total_lines_removed: int
+    total_files_modified: int
+    git_commits: int
+    tools_used: dict[str, int]
+    languages: dict[str, int]
+    memory_content: str | None
+    recent_sessions: list[ClaudeSessionEntry]
+
+
+def _format_iso_datetime(iso: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%b %d %H:%M")
+    except (ValueError, AttributeError):
+        return iso[:16] if iso else ""
+
+
+def get_claude_stats() -> ClaudeStats | None:
+    stats_file = Path.home() / ".claude" / "stats-cache.json"
+    if not stats_file.is_file():
+        return None
+    try:
+        data = json.loads(stats_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    model_usage: dict[str, tuple[int, int, int]] = {}
+    for model, info in (data.get("modelUsage") or {}).items():
+        model_usage[model] = (
+            info.get("inputTokens", 0),
+            info.get("outputTokens", 0),
+            info.get("cacheReadInputTokens", 0),
+        )
+
+    daily = data.get("dailyActivity") or []
+    daily_activity = [
+        (entry.get("date", ""), entry.get("messageCount", 0))
+        for entry in daily[-14:]
+    ]
+
+    raw_hours = data.get("hourCounts") or {}
+    hour_counts = {int(k): v for k, v in raw_hours.items()}
+
+    return ClaudeStats(
+        total_sessions=data.get("totalSessions", 0),
+        total_messages=data.get("totalMessages", 0),
+        model_usage=model_usage,
+        daily_activity=daily_activity,
+        hour_counts=hour_counts,
+    )
+
+
+def get_project_sessions(project_path: str) -> list[ClaudeSessionEntry]:
+    encoded = project_path.replace("/", "-")
+    index_file = Path.home() / ".claude" / "projects" / encoded / "sessions-index.json"
+    if not index_file.is_file():
+        return []
+    try:
+        data = json.loads(index_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    entries = []
+    for e in data.get("entries") or []:
+        entries.append(ClaudeSessionEntry(
+            session_id=e.get("sessionId", ""),
+            summary=e.get("summary", ""),
+            first_prompt=e.get("firstPrompt", ""),
+            message_count=e.get("messageCount", 0),
+            git_branch=e.get("gitBranch", ""),
+            created=_format_iso_datetime(e.get("created", "")),
+            modified=_format_iso_datetime(e.get("modified", "")),
+            project_path=e.get("projectPath", project_path),
+            is_sidechain=e.get("isSidechain", False),
+        ))
+
+    entries.sort(key=lambda x: x.modified, reverse=True)
+    return entries
+
+
+def get_project_detail(project_path: str) -> ClaudeProjectDetail:
+    name = Path(project_path).name
+
+    # Aggregate session-meta files for this project
+    meta_dir = Path.home() / ".claude" / "usage-data" / "session-meta"
+    total_messages = 0
+    total_lines_added = 0
+    total_lines_removed = 0
+    total_files_modified = 0
+    git_commits = 0
+    tools_used: dict[str, int] = {}
+    languages: dict[str, int] = {}
+    session_count = 0
+
+    if meta_dir.is_dir():
+        for meta_file in meta_dir.iterdir():
+            if not meta_file.suffix == ".json":
+                continue
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if meta.get("project_path") != project_path:
+                continue
+            session_count += 1
+            total_messages += meta.get("user_message_count", 0) + meta.get("assistant_message_count", 0)
+            total_lines_added += meta.get("lines_added", 0)
+            total_lines_removed += meta.get("lines_removed", 0)
+            total_files_modified += meta.get("files_modified", 0)
+            git_commits += meta.get("git_commits", 0)
+            for tool, count in (meta.get("tool_counts") or {}).items():
+                tools_used[tool] = tools_used.get(tool, 0) + count
+            for lang, count in (meta.get("languages") or {}).items():
+                languages[lang] = languages.get(lang, 0) + count
+
+    # Read MEMORY.md
+    encoded = project_path.replace("/", "-")
+    memory_file = Path.home() / ".claude" / "projects" / encoded / "memory" / "MEMORY.md"
+    memory_content = None
+    if memory_file.is_file():
+        try:
+            memory_content = memory_file.read_text(encoding="utf-8")
+        except OSError:
+            pass
+
+    # Get recent sessions
+    recent_sessions = get_project_sessions(project_path)[:10]
+
+    return ClaudeProjectDetail(
+        project_path=project_path,
+        name=name,
+        total_sessions=session_count,
+        total_messages=total_messages,
+        total_lines_added=total_lines_added,
+        total_lines_removed=total_lines_removed,
+        total_files_modified=total_files_modified,
+        git_commits=git_commits,
+        tools_used=tools_used,
+        languages=languages,
+        memory_content=memory_content,
+        recent_sessions=recent_sessions,
+    )
