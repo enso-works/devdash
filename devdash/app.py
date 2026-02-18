@@ -1,27 +1,30 @@
 from __future__ import annotations
 
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, Center
+from textual.command import Hit, Hits, Provider
+from textual.containers import Horizontal
 from textual.reactive import reactive
-from textual.screen import ModalScreen
 from textual.widgets import (
-    Button,
     DataTable,
     Footer,
     Header,
-    Label,
+    Input,
     Static,
     TabbedContent,
     TabPane,
 )
 
+from devdash.config import Config
+from devdash.screens import ConfirmScreen, LogViewerScreen, ProcessDetailScreen
 from devdash.processes import (
     DockerContainer,
     GeneralProcess,
     NodeProcess,
     SystemStats,
+    _format_bytes_rate,
     get_all_processes,
     get_docker_containers,
     get_node_processes,
@@ -31,13 +34,41 @@ from devdash.processes import (
     stop_docker_container,
 )
 
-REFRESH_INTERVAL = 3.0
+import dataclasses
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+
+_color_low = 50.0
+_color_high = 80.0
 
 
-def _bar(percent: float, width: int = 20) -> str:
+def _severity_style(percent: float) -> str:
+    if percent < _color_low:
+        return "green"
+    if percent < _color_high:
+        return "yellow"
+    return "red"
+
+
+def _colored_percent(value: float, suffix: str = "%") -> Text:
+    style = _severity_style(value)
+    return Text(f"{value:.1f}{suffix}", style=style)
+
+
+def _colored_memory(mb: float) -> Text:
+    percent = min(mb / 1024 * 100, 100)
+    style = _severity_style(percent)
+    return Text(f"{mb:.0f} MB", style=style)
+
+
+def _colored_bar(percent: float, width: int = 30) -> Text:
     filled = int(percent / 100 * width)
     empty = width - filled
-    return f"[{'|' * filled}{' ' * empty}] {percent:.1f}%"
+    style = _severity_style(percent)
+    bar_str = f"[{'|' * filled}{' ' * empty}] {percent:.1f}%"
+    return Text(bar_str, style=style)
 
 
 class StatusBar(Static):
@@ -47,7 +78,48 @@ class StatusBar(Static):
         self.update(value)
 
 
+class DevDashCommands(Provider):
+    def _get_commands(self) -> list[tuple[str, str, str]]:
+        return [
+            ("Refresh data", "Reload all process and system data", "action_refresh"),
+            ("Switch to Dev tab", "Show node processes and docker containers", "action_tab_dev"),
+            ("Switch to System tab", "Show all processes and system stats", "action_tab_system"),
+            ("Toggle filter", "Show/hide the process filter bar", "action_toggle_filter"),
+            ("Kill/Stop selected", "Kill the selected process or stop container", "action_kill"),
+            ("View logs", "View Docker container logs", "action_logs"),
+            ("Process details", "View detailed process information", "action_details"),
+            ("Export snapshot", "Export current data to JSON", "action_export"),
+            ("Toggle selection", "Select/deselect current row", "action_toggle_select"),
+            ("Quit", "Exit devdash", "action_quit"),
+        ]
+
+    def _make_callback(self, action: str):
+        def callback() -> None:
+            method = getattr(self.app, action, None)
+            if method:
+                method()
+        return callback
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for name, help_text, action in self._get_commands():
+            score = matcher.match(name)
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(name),
+                    self._make_callback(action),
+                    help=help_text,
+                )
+
+    async def discover(self) -> Hits:
+        for name, help_text, action in self._get_commands():
+            yield Hit(0, name, self._make_callback(action), help=help_text)
+
+
 class DevDashApp(App):
+    COMMANDS = {DevDashCommands}
+
     CSS = """
     Screen {
         layout: vertical;
@@ -92,7 +164,7 @@ class DevDashApp(App):
 
     #sys-stats {
         height: auto;
-        max-height: 6;
+        max-height: 7;
         padding: 0 1;
         background: $surface;
     }
@@ -125,6 +197,21 @@ class DevDashApp(App):
     .stat-cell {
         height: 1;
     }
+
+    #filter-bar {
+        height: auto;
+        display: none;
+        padding: 0 1;
+        background: $surface;
+    }
+
+    #filter-bar.visible {
+        display: block;
+    }
+
+    #filter-input {
+        width: 100%;
+    }
     """
 
     TITLE = "devdash"
@@ -132,6 +219,11 @@ class DevDashApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("k", "kill", "Kill/Stop"),
+        Binding("space", "toggle_select", "Select", show=True),
+        Binding("l", "logs", "Logs"),
+        Binding("d", "details", "Details"),
+        Binding("e", "export", "Export"),
+        Binding("slash", "toggle_filter", "Filter", show=True),
         Binding("tab", "focus_next_table", "Next Table", show=True),
         Binding("1", "tab_dev", "Dev Tab"),
         Binding("2", "tab_system", "System Tab"),
@@ -143,9 +235,26 @@ class DevDashApp(App):
     system_stats: SystemStats | None = None
     _current_tab: str = "dev"
     _active_table_id: str = "node-table"
+    _sort_state: dict[str, tuple[int, bool]] = {}  # table_id -> (col_index, reverse)
+    _filter_text: str = ""
+    _prev_node_pids: set[int] = set()
+    _prev_node_ports: dict[int, list[int]] = {}
+    _prev_docker_ids: set[str] = set()
+    _tracking_initialized: bool = False
+    _selected_pids: set[int] = set()
+    _selected_containers: set[str] = set()
+
+    def __init__(self, config: Config | None = None) -> None:
+        super().__init__()
+        self._config = config or Config()
+        global _color_low, _color_high
+        _color_low = self._config.color_threshold_low
+        _color_high = self._config.color_threshold_high
 
     def compose(self) -> ComposeResult:
         yield Header()
+        with Horizontal(id="filter-bar"):
+            yield Input(placeholder="Filter processes... (Esc to close)", id="filter-input")
         with TabbedContent(id="tabs"):
             with TabPane("[1] Dev", id="dev"):
                 yield Static(" Node Processes", id="node-header", classes="section-header active")
@@ -162,11 +271,11 @@ class DevDashApp(App):
     def on_mount(self) -> None:
         node_table = self.query_one("#node-table", DataTable)
         node_table.cursor_type = "row"
-        node_table.add_columns("PID", "Port(s)", "Memory", "CPU", "Uptime", "Directory", "Command")
+        node_table.add_columns("PID", "Project", "Port(s)", "Memory", "CPU", "Uptime", "Directory", "Command")
 
         docker_table = self.query_one("#docker-table", DataTable)
         docker_table.cursor_type = "row"
-        docker_table.add_columns("ID", "Name", "Image", "Status", "Ports", "Running For")
+        docker_table.add_columns("ID", "Name", "Image", "Status", "Ports", "Running For", "Compose", "Service")
 
         all_table = self.query_one("#all-procs-table", DataTable)
         all_table.cursor_type = "row"
@@ -174,7 +283,7 @@ class DevDashApp(App):
 
         self._highlight_active_table()
         self.load_data()
-        self.set_interval(REFRESH_INTERVAL, self.load_data)
+        self.set_interval(self._config.refresh_rate, self.load_data)
 
     def _highlight_active_table(self) -> None:
         table_header_map = {
@@ -230,11 +339,114 @@ class DevDashApp(App):
                 self._active_table_id = "node-table"
         self._highlight_active_table()
 
+    def action_toggle_filter(self) -> None:
+        bar = self.query_one("#filter-bar", Horizontal)
+        inp = self.query_one("#filter-input", Input)
+        if bar.has_class("visible"):
+            bar.remove_class("visible")
+            self._filter_text = ""
+            inp.value = ""
+            try:
+                self.query_one(f"#{self._active_table_id}", DataTable).focus()
+            except Exception:
+                pass
+            self.load_data()
+        else:
+            bar.add_class("visible")
+            inp.focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "filter-input":
+            self._filter_text = event.value
+            self._apply_filter_to_all_tables()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "filter-input":
+            try:
+                self.query_one(f"#{self._active_table_id}", DataTable).focus()
+            except Exception:
+                pass
+
+    def key_escape(self) -> None:
+        bar = self.query_one("#filter-bar", Horizontal)
+        if bar.has_class("visible"):
+            self.action_toggle_filter()
+
+    def _row_matches_filter(self, cells: list) -> bool:
+        if not self._filter_text:
+            return True
+        query = self._filter_text.lower()
+        for cell in cells:
+            text = cell.plain if isinstance(cell, Text) else str(cell)
+            if query in text.lower():
+                return True
+        return False
+
+    def _apply_filter_to_all_tables(self) -> None:
+        if self.node_procs:
+            self._update_dev_tables(self.node_procs, self.docker_containers)
+        if self.all_procs and self.system_stats:
+            self._update_system_tab(self.all_procs, self.system_stats)
+
+    @staticmethod
+    def _parse_sort_value(cell: object) -> object:
+        text = cell.plain if isinstance(cell, Text) else str(cell)
+        text = text.strip().rstrip("%")
+        match = re.match(r"^([\d.]+)", text)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                pass
+        return text.lower()
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        table = event.data_table
+        table_id = table.id or ""
+        col_index = event.column_index
+        prev = self._sort_state.get(table_id)
+        if prev and prev[0] == col_index:
+            reverse = not prev[1]
+        else:
+            reverse = False
+        self._sort_state[table_id] = (col_index, reverse)
+        self._sort_table(table, col_index, reverse)
+
+    def _sort_table(self, table: DataTable, col_index: int, reverse: bool) -> None:
+        rows = []
+        for row_key in table.rows:
+            cells = [table.get_cell(row_key, col) for col in table.columns]
+            rows.append((row_key, cells))
+        rows.sort(key=lambda r: self._parse_sort_value(r[1][col_index]), reverse=reverse)
+        cursor_key = None
+        try:
+            cursor_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except Exception:
+            pass
+        table.clear()
+        for row_key, cells in rows:
+            table.add_row(*cells, key=row_key.value)
+        if cursor_key:
+            try:
+                row_idx = next(i for i, (rk, _) in enumerate(rows) if rk.value == cursor_key.value)
+                table.move_cursor(row=row_idx)
+            except (StopIteration, Exception):
+                pass
+
+    def _apply_sort(self, table_id: str) -> None:
+        sort = self._sort_state.get(table_id)
+        if sort:
+            try:
+                table = self.query_one(f"#{table_id}", DataTable)
+                self._sort_table(table, sort[0], sort[1])
+            except Exception:
+                pass
+
     @work(thread=True, exclusive=True, group="loader")
     def load_data(self) -> None:
         node_procs = get_node_processes()
         docker_containers = get_docker_containers()
-        all_procs = get_all_processes()
+        all_procs = get_all_processes(limit=self._config.process_limit)
         stats = get_system_stats()
         self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats)
 
@@ -245,6 +457,8 @@ class DevDashApp(App):
         all_procs: list[GeneralProcess],
         stats: SystemStats,
     ) -> None:
+        self._check_notifications(node_procs, docker_containers)
+
         self.node_procs = node_procs
         self.docker_containers = docker_containers
         self.all_procs = all_procs
@@ -259,6 +473,47 @@ class DevDashApp(App):
         disk = f"Disk {stats.disk_percent:.0f}%"
         status.message = f" {cpu} | {mem} | {disk} | {len(node_procs)} node | {len(docker_containers)} docker | 1/2=tabs r=refresh k=kill q=quit"
 
+    def _check_notifications(
+        self,
+        node_procs: list[NodeProcess],
+        docker_containers: list[DockerContainer],
+    ) -> None:
+        current_pids = {p.pid for p in node_procs}
+        current_docker_ids = {c.container_id for c in docker_containers}
+        current_ports = {p.pid: p.ports for p in node_procs}
+
+        if not self._tracking_initialized:
+            self._prev_node_pids = current_pids
+            self._prev_node_ports = current_ports
+            self._prev_docker_ids = current_docker_ids
+            self._tracking_initialized = True
+            return
+
+        vanished_pids = self._prev_node_pids - current_pids
+        for pid in vanished_pids:
+            ports = self._prev_node_ports.get(pid, [])
+            port_str = f" (port {', '.join(str(p) for p in ports)})" if ports else ""
+            self.notify(f"Node process PID {pid}{port_str} exited", severity="warning", timeout=5)
+
+        vanished_containers = self._prev_docker_ids - current_docker_ids
+        for cid in vanished_containers:
+            self.notify(f"Docker container {cid[:12]} stopped", severity="warning", timeout=5)
+
+        for proc in node_procs:
+            if proc.pid not in self._prev_node_pids and proc.ports:
+                port_str = ", ".join(str(p) for p in proc.ports)
+                self.notify(f"New node process PID {proc.pid} on port {port_str}", severity="information", timeout=5)
+            elif self._config.watched_ports and proc.ports:
+                for port in proc.ports:
+                    if port in self._config.watched_ports:
+                        prev_ports = self._prev_node_ports.get(proc.pid, [])
+                        if port not in prev_ports:
+                            self.notify(f"Watched port {port} active (PID {proc.pid})", severity="information", timeout=5)
+
+        self._prev_node_pids = current_pids
+        self._prev_node_ports = current_ports
+        self._prev_docker_ids = current_docker_ids
+
     def _update_dev_tables(
         self, node_procs: list[NodeProcess], docker_containers: list[DockerContainer]
     ) -> None:
@@ -269,41 +524,53 @@ class DevDashApp(App):
         docker_cursor = docker_table.cursor_row
 
         node_table.clear()
+        node_count = 0
         for proc in node_procs:
             ports = ", ".join(str(p) for p in proc.ports) if proc.ports else "-"
-            node_table.add_row(
+            cells = [
                 str(proc.pid),
+                proc.project or "-",
                 ports,
-                f"{proc.memory_mb:.0f} MB",
-                f"{proc.cpu_percent:.1f}%",
+                _colored_memory(proc.memory_mb),
+                _colored_percent(proc.cpu_percent),
                 proc.uptime,
                 proc.cwd,
                 proc.command,
-                key=str(proc.pid),
-            )
+            ]
+            if self._row_matches_filter(cells):
+                node_table.add_row(*cells, key=str(proc.pid))
+                node_count += 1
 
         docker_table.clear()
+        docker_count = 0
         for container in docker_containers:
-            docker_table.add_row(
+            cells = [
                 container.container_id,
                 container.name,
                 container.image,
                 container.status,
                 container.ports or "-",
                 container.created,
-                key=container.container_id,
-            )
+                container.compose_project or "-",
+                container.compose_service or "-",
+            ]
+            if self._row_matches_filter(cells):
+                docker_table.add_row(*cells, key=container.container_id)
+                docker_count += 1
 
-        if node_procs and node_cursor is not None:
+        if node_count and node_cursor is not None:
             try:
-                node_table.move_cursor(row=min(node_cursor, len(node_procs) - 1))
+                node_table.move_cursor(row=min(node_cursor, node_count - 1))
             except Exception:
                 pass
-        if docker_containers and docker_cursor is not None:
+        if docker_count and docker_cursor is not None:
             try:
-                docker_table.move_cursor(row=min(docker_cursor, len(docker_containers) - 1))
+                docker_table.move_cursor(row=min(docker_cursor, docker_count - 1))
             except Exception:
                 pass
+
+        self._apply_sort("node-table")
+        self._apply_sort("docker-table")
 
         node_header = self.query_one("#node-header", Static)
         node_header.update(f" Node Processes ({len(node_procs)})")
@@ -312,52 +579,205 @@ class DevDashApp(App):
 
     def _update_system_tab(self, all_procs: list[GeneralProcess], stats: SystemStats) -> None:
         sys_widget = self.query_one("#sys-stats", Static)
-        lines = [
-            f"  CPU   {_bar(stats.cpu_percent, 30)}   ({stats.cpu_count} cores)",
-            f"  Mem   {_bar(stats.memory_percent, 30)}   {stats.memory_used_gb:.1f} / {stats.memory_total_gb:.1f} GB",
-            f"  Swap  {_bar(stats.swap_percent, 30)}   {stats.swap_used_gb:.1f} / {stats.swap_total_gb:.1f} GB",
-            f"  Disk  {_bar(stats.disk_percent, 30)}   {stats.disk_used_gb:.0f} / {stats.disk_total_gb:.0f} GB  ({stats.disk_free_gb:.0f} GB free)",
-        ]
-        sys_widget.update("\n".join(lines))
+        output = Text()
+        output.append("  CPU   ")
+        output.append_text(_colored_bar(stats.cpu_percent))
+        output.append(f"   ({stats.cpu_count} cores)\n")
+        output.append("  Mem   ")
+        output.append_text(_colored_bar(stats.memory_percent))
+        output.append(f"   {stats.memory_used_gb:.1f} / {stats.memory_total_gb:.1f} GB\n")
+        output.append("  Swap  ")
+        output.append_text(_colored_bar(stats.swap_percent))
+        output.append(f"   {stats.swap_used_gb:.1f} / {stats.swap_total_gb:.1f} GB\n")
+        output.append("  Disk  ")
+        output.append_text(_colored_bar(stats.disk_percent))
+        output.append(f"   {stats.disk_used_gb:.0f} / {stats.disk_total_gb:.0f} GB  ({stats.disk_free_gb:.0f} GB free)\n")
+        if stats.net_sent_per_sec is not None and stats.net_recv_per_sec is not None:
+            up = _format_bytes_rate(stats.net_sent_per_sec)
+            down = _format_bytes_rate(stats.net_recv_per_sec)
+            output.append(f"  Net   Up: {up}  Down: {down}")
+        else:
+            output.append("  Net   N/A")
+        sys_widget.update(output)
 
         table = self.query_one("#all-procs-table", DataTable)
         cursor = table.cursor_row
 
         table.clear()
+        proc_count = 0
         for proc in all_procs:
-            table.add_row(
+            cells = [
                 str(proc.pid),
                 proc.name,
-                f"{proc.cpu_percent:.1f}",
-                f"{proc.memory_mb:.0f} MB",
-                f"{proc.memory_percent:.1f}%",
+                _colored_percent(proc.cpu_percent),
+                _colored_memory(proc.memory_mb),
+                _colored_percent(proc.memory_percent),
                 proc.user,
                 proc.status,
                 proc.command,
-                key=str(proc.pid),
-            )
+            ]
+            if self._row_matches_filter(cells):
+                table.add_row(*cells, key=str(proc.pid))
+                proc_count += 1
 
-        if all_procs and cursor is not None:
+        if proc_count and cursor is not None:
             try:
-                table.move_cursor(row=min(cursor, len(all_procs) - 1))
+                table.move_cursor(row=min(cursor, proc_count - 1))
             except Exception:
                 pass
 
+        self._apply_sort("all-procs-table")
+
         procs_header = self.query_one("#procs-header", Static)
-        procs_header.update(f" All Processes ({len(all_procs)}, by memory)")
+        procs_header.update(f" All Processes ({proc_count}, by memory)")
 
     def action_refresh(self) -> None:
         status = self.query_one("#status-bar", StatusBar)
         status.message = " Refreshing..."
         self.load_data()
 
+    def action_toggle_select(self) -> None:
+        table = self.query_one(f"#{self._active_table_id}", DataTable)
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except Exception:
+            return
+        key = row_key.value
+        if self._active_table_id == "docker-table":
+            if key in self._selected_containers:
+                self._selected_containers.discard(key)
+            else:
+                self._selected_containers.add(key)
+        else:
+            try:
+                pid = int(key)
+            except ValueError:
+                return
+            if pid in self._selected_pids:
+                self._selected_pids.discard(pid)
+            else:
+                self._selected_pids.add(pid)
+        self._refresh_selection_display()
+
+    def _refresh_selection_display(self) -> None:
+        for table_id, selected, is_pid in [
+            ("node-table", self._selected_pids, True),
+            ("all-procs-table", self._selected_pids, True),
+            ("docker-table", self._selected_containers, False),
+        ]:
+            try:
+                table = self.query_one(f"#{table_id}", DataTable)
+            except Exception:
+                continue
+            for row_key in table.rows:
+                key_val = row_key.value
+                match = (int(key_val) in selected) if is_pid else (key_val in selected)
+                try:
+                    first_col = list(table.columns.keys())[0]
+                    cell = table.get_cell(row_key, first_col)
+                    text = cell.plain if isinstance(cell, Text) else str(cell)
+                    if match and not text.startswith("*"):
+                        table.update_cell(row_key, first_col, Text(f"* {text}", style="bold cyan"))
+                    elif not match and text.startswith("* "):
+                        table.update_cell(row_key, first_col, text[2:])
+                except Exception:
+                    pass
+
     def action_kill(self) -> None:
+        has_selected = bool(self._selected_pids) or bool(self._selected_containers)
+        if has_selected:
+            self._batch_kill()
+            return
         if self._active_table_id == "node-table":
             self._kill_node()
         elif self._active_table_id == "docker-table":
             self._stop_docker()
         elif self._active_table_id == "all-procs-table":
             self._kill_general()
+
+    def _batch_kill(self) -> None:
+        items = []
+        if self._selected_pids:
+            items.append(f"{len(self._selected_pids)} process(es)")
+        if self._selected_containers:
+            items.append(f"{len(self._selected_containers)} container(s)")
+        msg = f"Kill/stop {', '.join(items)}?"
+        self.push_screen(
+            ConfirmScreen(msg),
+            callback=self._on_batch_kill_confirmed,
+        )
+
+    @work(thread=True)
+    def _on_batch_kill_confirmed(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        status = self.query_one("#status-bar", StatusBar)
+        killed = 0
+        for pid in list(self._selected_pids):
+            self.call_from_thread(setattr, status, "message", f" Killing PID {pid}...")
+            if kill_process(pid):
+                killed += 1
+        stopped = 0
+        for cid in list(self._selected_containers):
+            self.call_from_thread(setattr, status, "message", f" Stopping container {cid[:12]}...")
+            if stop_docker_container(cid):
+                stopped += 1
+        self.call_from_thread(setattr, status, "message", f" Killed {killed} process(es), stopped {stopped} container(s)")
+        self._selected_pids.clear()
+        self._selected_containers.clear()
+        self.call_from_thread(self.load_data)
+
+    def action_logs(self) -> None:
+        if self._active_table_id != "docker-table":
+            self.notify("Select a Docker container first", severity="warning")
+            return
+        docker_table = self.query_one("#docker-table", DataTable)
+        if not self.docker_containers:
+            return
+        try:
+            row_key, _ = docker_table.coordinate_to_cell_key(docker_table.cursor_coordinate)
+            container_id = row_key.value
+        except Exception:
+            return
+        container = next(
+            (c for c in self.docker_containers if c.container_id == container_id), None
+        )
+        if container:
+            self.push_screen(LogViewerScreen(container_id, container.name))
+
+    def action_details(self) -> None:
+        if self._active_table_id == "docker-table":
+            self.notify("Details not available for Docker containers", severity="warning")
+            return
+        table_id = self._active_table_id
+        table = self.query_one(f"#{table_id}", DataTable)
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            pid = int(row_key.value)
+        except Exception:
+            return
+        if table_id == "node-table":
+            proc = next((p for p in self.node_procs if p.pid == pid), None)
+            name = proc.name if proc else str(pid)
+        else:
+            proc = next((p for p in self.all_procs if p.pid == pid), None)
+            name = proc.name if proc else str(pid)
+        self.push_screen(ProcessDetailScreen(pid, name))
+
+    def action_export(self) -> None:
+        snapshot = {
+            "timestamp": datetime.now().isoformat(),
+            "node_processes": [dataclasses.asdict(p) for p in self.node_procs],
+            "docker_containers": [dataclasses.asdict(c) for c in self.docker_containers],
+            "all_processes": [dataclasses.asdict(p) for p in self.all_procs],
+            "system_stats": dataclasses.asdict(self.system_stats) if self.system_stats else None,
+        }
+        export_dir = Path.home() / ".local" / "share" / "devdash"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filepath = export_dir / f"snapshot-{ts}.json"
+        filepath.write_text(json.dumps(snapshot, indent=2, default=str))
+        self.notify(f"Exported to {filepath}", timeout=5)
 
     def _kill_node(self) -> None:
         node_table = self.query_one("#node-table", DataTable)
@@ -456,61 +876,3 @@ class DevDashApp(App):
         self.call_from_thread(self.load_data)
 
 
-class ConfirmScreen(ModalScreen[bool]):
-    CSS = """
-    ConfirmScreen {
-        align: center middle;
-    }
-
-    #confirm-dialog {
-        width: 60;
-        height: auto;
-        max-height: 12;
-        border: thick $primary;
-        background: $surface;
-        padding: 1 2;
-    }
-
-    #confirm-label {
-        width: 100%;
-        text-align: center;
-        margin-bottom: 1;
-    }
-
-    #confirm-buttons {
-        width: 100%;
-        align: center middle;
-        height: 3;
-    }
-
-    #confirm-buttons Button {
-        margin: 0 2;
-    }
-    """
-
-    BINDINGS = [
-        Binding("y", "confirm", "Yes", show=False),
-        Binding("n", "cancel", "No", show=False),
-        Binding("escape", "cancel", "Cancel", show=False),
-    ]
-
-    def __init__(self, message: str) -> None:
-        super().__init__()
-        self._message = message
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-dialog"):
-            yield Label(self._message, id="confirm-label")
-            with Center():
-                with Horizontal(id="confirm-buttons"):
-                    yield Button("[y] Yes", variant="error", id="yes-btn")
-                    yield Button("[n] No", variant="default", id="no-btn")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "yes-btn")
-
-    def action_confirm(self) -> None:
-        self.dismiss(True)
-
-    def action_cancel(self) -> None:
-        self.dismiss(False)
