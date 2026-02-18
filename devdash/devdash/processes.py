@@ -189,3 +189,113 @@ def stop_docker_container(container_id: str) -> bool:
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
+
+
+@dataclass
+class SystemStats:
+    cpu_percent: float
+    cpu_count: int
+    memory_total_gb: float
+    memory_used_gb: float
+    memory_percent: float
+    swap_total_gb: float
+    swap_used_gb: float
+    swap_percent: float
+    disk_total_gb: float
+    disk_used_gb: float
+    disk_free_gb: float
+    disk_percent: float
+
+
+@dataclass
+class GeneralProcess:
+    pid: int
+    name: str
+    cpu_percent: float
+    memory_mb: float
+    memory_percent: float
+    status: str
+    user: str
+    command: str
+
+
+def get_system_stats() -> SystemStats:
+    cpu = psutil.cpu_percent(interval=0)
+    cpu_count = psutil.cpu_count() or 1
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    disk = psutil.disk_usage("/")
+
+    return SystemStats(
+        cpu_percent=cpu,
+        cpu_count=cpu_count,
+        memory_total_gb=mem.total / (1024 ** 3),
+        memory_used_gb=mem.used / (1024 ** 3),
+        memory_percent=mem.percent,
+        swap_total_gb=swap.total / (1024 ** 3),
+        swap_used_gb=swap.used / (1024 ** 3),
+        swap_percent=swap.percent,
+        disk_total_gb=disk.total / (1024 ** 3),
+        disk_used_gb=disk.used / (1024 ** 3),
+        disk_free_gb=disk.free / (1024 ** 3),
+        disk_percent=disk.percent,
+    )
+
+
+def get_all_processes(limit: int = 80) -> list[GeneralProcess]:
+    results = []
+    for proc in psutil.process_iter(["pid", "name", "username", "status", "cmdline"]):
+        try:
+            info = proc.info
+            pid = info["pid"]
+            name = info.get("name") or ""
+            user = info.get("username") or ""
+            status = info.get("status") or ""
+            cmdline = info.get("cmdline") or []
+
+            try:
+                cpu = proc.cpu_percent(interval=0)
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                cpu = 0.0
+
+            try:
+                mem_info = proc.memory_info()
+                mem_mb = mem_info.rss / (1024 * 1024)
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                mem_mb = 0.0
+
+            try:
+                mem_pct = proc.memory_percent()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                mem_pct = 0.0
+
+            cmd = _shorten_command(cmdline) if cmdline else name
+
+            results.append(GeneralProcess(
+                pid=pid,
+                name=name,
+                cpu_percent=cpu,
+                memory_mb=mem_mb,
+                memory_percent=mem_pct,
+                status=status,
+                user=user,
+                command=cmd,
+            ))
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+
+    results.sort(key=lambda p: p.memory_mb, reverse=True)
+    return results[:limit]
+
+
+def kill_process(pid: int) -> bool:
+    try:
+        proc = psutil.Process(pid)
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except psutil.TimeoutExpired:
+            proc.kill()
+        return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
