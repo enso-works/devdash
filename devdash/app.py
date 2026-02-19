@@ -301,6 +301,7 @@ class DevDashApp(App):
             shutil.which("claude") is not None
             or (Path.home() / ".claude").is_dir()
         )
+        self._editor_cmd = shutil.which("code") or shutil.which("cursor")
         global _color_low, _color_high
         _color_low = self._config.color_threshold_low
         _color_high = self._config.color_threshold_high
@@ -876,7 +877,7 @@ class DevDashApp(App):
     def _open_launch_menu(self, path: str) -> None:
         name = Path(path).name
         self.push_screen(
-            LaunchMenuScreen(name),
+            LaunchMenuScreen(name, editor_cmd=self._editor_cmd),
             callback=lambda action: self._on_launch_menu_selected(action, path),
         )
 
@@ -886,10 +887,11 @@ class DevDashApp(App):
         import subprocess as sp
         name = Path(path).name
 
-        if action == "vscode":
+        if action == "editor" and self._editor_cmd:
+            editor_label = "Cursor" if "cursor" in self._editor_cmd else "VS Code"
             try:
-                sp.Popen(["code", path])
-                self.notify(f"Opening {name} in VS Code", timeout=3)
+                sp.Popen([self._editor_cmd, path])
+                self.notify(f"Opening {name} in {editor_label}", timeout=3)
             except Exception as e:
                 self.notify(f"Failed: {e}", severity="error", timeout=5)
             return

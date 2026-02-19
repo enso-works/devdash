@@ -323,25 +323,27 @@ class LaunchMenuScreen(ModalScreen[str | None]):
         Binding("f", "select_finder", "", show=False),
     ]
 
-    _ITEMS = [
-        ("new", "[n] New session"),
-        ("new_skip_perms", "[y] New session (skip permissions)"),
-        ("new_plan", "[p] New session (plan mode)"),
-        ("continue_session", "[c] Continue last session"),
-        ("resume", "[r] Resume session picker"),
-        ("vscode", "[v] Open in VS Code"),
-        ("finder", "[f] Open in Finder"),
-    ]
-
-    def __init__(self, project_name: str) -> None:
+    def __init__(self, project_name: str, editor_cmd: str | None = None) -> None:
         super().__init__()
         self._project_name = project_name
+        self._editor_cmd = editor_cmd
 
     def compose(self) -> ComposeResult:
+        items = [
+            ("new", "[n] New session"),
+            ("new_skip_perms", "[y] New session (skip permissions)"),
+            ("new_plan", "[p] New session (plan mode)"),
+            ("continue_session", "[c] Continue last session"),
+            ("resume", "[r] Resume session picker"),
+        ]
+        if self._editor_cmd:
+            label = "Cursor" if "cursor" in self._editor_cmd else "VS Code"
+            items.append(("editor", f"[v] Open in {label}"))
+        items.append(("finder", "[f] Open in Finder"))
         with Vertical(id="launch-dialog"):
             yield Static(f"Launch: {self._project_name}", id="launch-title")
             yield OptionList(
-                *[Option(label, id=action_id) for action_id, label in self._ITEMS],
+                *[Option(label, id=action_id) for action_id, label in items],
                 id="launch-options",
             )
 
@@ -367,7 +369,7 @@ class LaunchMenuScreen(ModalScreen[str | None]):
         self.dismiss("resume")
 
     def action_select_vscode(self) -> None:
-        self.dismiss("vscode")
+        self.dismiss("editor")
 
     def action_select_finder(self) -> None:
         self.dismiss("finder")
