@@ -22,6 +22,131 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 
+class CleanupScreen(ModalScreen[list | None]):
+    CSS = """
+    CleanupScreen {
+        align: center middle;
+    }
+
+    #cleanup-dialog {
+        width: 90%;
+        height: 80%;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #cleanup-title {
+        height: 1;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #cleanup-table {
+        height: 1fr;
+    }
+
+    #cleanup-footer {
+        height: 1;
+        color: $text-muted;
+        padding: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("space", "toggle_item", "Toggle", show=False),
+        Binding("a", "select_all", "Select All", show=False),
+        Binding("n", "select_none", "Clear", show=False),
+        Binding("enter", "execute", "Execute", show=False),
+        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("q", "cancel", "Cancel", show=False),
+    ]
+
+    def __init__(self, suggestions: list) -> None:
+        super().__init__()
+        self._suggestions = suggestions
+        self._selected: set[int] = set(range(len(suggestions)))
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="cleanup-dialog"):
+            yield Static(f"Cleanup Suggestions ({len(self._suggestions)} items)", id="cleanup-title")
+            yield DataTable(id="cleanup-table")
+            yield Static(
+                "space=toggle  a=all  n=none  enter=execute  esc=cancel",
+                id="cleanup-footer",
+            )
+
+    def on_mount(self) -> None:
+        table = self.query_one("#cleanup-table", DataTable)
+        table.cursor_type = "row"
+        table.add_columns("Sel", "Category", "Name", "Reason", "Action")
+        self._populate_table()
+
+    def _category_text(self, category: str) -> str:
+        labels = {
+            "idle": "Idle",
+            "zombie": "Zombie",
+            "stale_container": "Stale Container",
+            "orphan": "Orphan",
+        }
+        return labels.get(category, category)
+
+    def _category_style(self, category: str) -> str:
+        styles = {
+            "idle": "yellow",
+            "zombie": "red",
+            "stale_container": "cyan",
+            "orphan": "magenta",
+        }
+        return styles.get(category, "white")
+
+    def _populate_table(self) -> None:
+        from rich.text import Text as RichText
+
+        table = self.query_one("#cleanup-table", DataTable)
+        table.clear()
+        for i, s in enumerate(self._suggestions):
+            check = "[x]" if i in self._selected else "[ ]"
+            cat_text = RichText(self._category_text(s.category), style=self._category_style(s.category))
+            action = "Kill" if s.action_type == "kill" else "Stop"
+            table.add_row(check, cat_text, s.label, s.reason, action, key=str(i))
+
+    def action_toggle_item(self) -> None:
+        table = self.query_one("#cleanup-table", DataTable)
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            idx = int(row_key.value)
+        except Exception:
+            return
+        if idx in self._selected:
+            self._selected.discard(idx)
+        else:
+            self._selected.add(idx)
+        self._populate_table()
+        try:
+            table.move_cursor(row=idx)
+        except Exception:
+            pass
+
+    def action_select_all(self) -> None:
+        self._selected = set(range(len(self._suggestions)))
+        self._populate_table()
+
+    def action_select_none(self) -> None:
+        self._selected.clear()
+        self._populate_table()
+
+    def action_execute(self) -> None:
+        if not self._selected:
+            self.dismiss(None)
+            return
+        selected = [self._suggestions[i] for i in sorted(self._selected)]
+        self.dismiss(selected)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ConfirmScreen(ModalScreen[bool]):
     CSS = """
     ConfirmScreen {

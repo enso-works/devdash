@@ -19,6 +19,7 @@ from textual.widgets import (
 
 from devdash.config import Config
 from devdash.screens import (
+    CleanupScreen,
     ConfirmScreen,
     ClaudeProjectDetailScreen,
     LaunchMenuScreen,
@@ -30,6 +31,7 @@ from devdash.processes import (
     ClaudeInstance,
     ClaudeProject,
     ClaudeStats,
+    CleanupSuggestion,
     DockerContainer,
     GeneralProcess,
     NodeProcess,
@@ -39,6 +41,7 @@ from devdash.processes import (
     get_claude_instances,
     get_claude_projects,
     get_claude_stats,
+    get_cleanup_suggestions,
     get_docker_containers,
     get_node_processes,
     get_system_stats,
@@ -53,6 +56,7 @@ import re
 import shlex
 import shutil
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -111,6 +115,7 @@ class DevDashCommands(Provider):
             ("Process details", "View detailed process information", "action_details"),
             ("Export snapshot", "Export current data to JSON", "action_export"),
             ("Toggle selection", "Select/deselect current row", "action_toggle_select"),
+            ("Cleanup suggestions", "Detect and clean up stale/idle resources", "action_cleanup"),
             ("Quit", "Exit devdash", "action_quit"),
         ]
         app = self.app
@@ -267,6 +272,7 @@ class DevDashApp(App):
         Binding("3", "tab_claude", "Claude Tab"),
         Binding("enter", "launch_or_details", "Open", show=False, priority=False),
         Binding("s", "session_browser", "Sessions", show=False),
+        Binding("c", "cleanup", "Cleanup"),
     ]
 
     node_procs: list[NodeProcess] = []
@@ -286,6 +292,7 @@ class DevDashApp(App):
     _tracking_initialized: bool = False
     _selected_pids: set[int] = set()
     _selected_containers: set[str] = set()
+    _idle_tracker: dict[int, float] = {}  # pid -> monotonic timestamp when CPU first dropped below threshold
 
     def __init__(
         self,
@@ -575,6 +582,7 @@ class DevDashApp(App):
         claude_stats: ClaudeStats | None = None,
     ) -> None:
         self._check_notifications(node_procs, docker_containers)
+        self._update_idle_tracker(node_procs)
 
         self.node_procs = node_procs
         self.docker_containers = docker_containers
@@ -643,6 +651,20 @@ class DevDashApp(App):
         self._prev_node_pids = current_pids
         self._prev_node_ports = current_ports
         self._prev_docker_ids = current_docker_ids
+
+    def _update_idle_tracker(self, node_procs: list[NodeProcess]) -> None:
+        now = time.monotonic()
+        threshold = self._config.cleanup_idle_threshold_cpu
+        current_pids = {p.pid for p in node_procs}
+        for proc in node_procs:
+            if proc.cpu_percent < threshold:
+                if proc.pid not in self._idle_tracker:
+                    self._idle_tracker[proc.pid] = now
+            else:
+                self._idle_tracker.pop(proc.pid, None)
+        for pid in list(self._idle_tracker):
+            if pid not in current_pids:
+                del self._idle_tracker[pid]
 
     def _update_dev_tables(
         self, node_procs: list[NodeProcess], docker_containers: list[DockerContainer]
@@ -1167,6 +1189,72 @@ class DevDashApp(App):
         filepath = export_dir / f"snapshot-{ts}.json"
         filepath.write_text(json.dumps(snapshot, indent=2, default=str))
         self.notify(f"Exported to {filepath}", timeout=5)
+
+    def action_cleanup(self) -> None:
+        self._compute_and_show_cleanup()
+
+    @work(thread=True)
+    def _compute_and_show_cleanup(self) -> None:
+        suggestions = get_cleanup_suggestions(
+            node_procs=self.node_procs,
+            docker_containers=self.docker_containers,
+            idle_tracker=self._idle_tracker,
+            idle_threshold_cpu=self._config.cleanup_idle_threshold_cpu,
+            idle_threshold_minutes=self._config.cleanup_idle_threshold_minutes,
+            docker_stale_days=self._config.cleanup_docker_stale_days,
+        )
+        if not suggestions:
+            self.call_from_thread(self.notify, "No cleanup suggestions found", timeout=3)
+            return
+        self.call_from_thread(self._show_cleanup_screen, suggestions)
+
+    def _show_cleanup_screen(self, suggestions: list[CleanupSuggestion]) -> None:
+        self.push_screen(
+            CleanupScreen(suggestions),
+            callback=self._on_cleanup_selected,
+        )
+
+    def _on_cleanup_selected(self, selected: list | None) -> None:
+        if not selected:
+            return
+        kills = [s for s in selected if s.action_type == "kill"]
+        stops = [s for s in selected if s.action_type == "stop_container"]
+        parts = []
+        if kills:
+            parts.append(f"Kill {len(kills)} process(es)")
+        if stops:
+            parts.append(f"Stop {len(stops)} container(s)")
+        msg = " and ".join(parts) + "?"
+        self.push_screen(
+            ConfirmScreen(msg),
+            callback=lambda confirmed: self._execute_cleanup(confirmed, selected),
+        )
+
+    @work(thread=True)
+    def _execute_cleanup(self, confirmed: bool, items: list) -> None:
+        if not confirmed:
+            return
+        status = self.query_one("#status-bar", StatusBar)
+        killed = 0
+        stopped = 0
+        for item in items:
+            if item.action_type == "kill" and item.pid is not None:
+                self.call_from_thread(setattr, status, "message", f" Killing {item.label}...")
+                if kill_process(item.pid):
+                    killed += 1
+            elif item.action_type == "stop_container" and item.container_id is not None:
+                self.call_from_thread(setattr, status, "message", f" Stopping {item.label}...")
+                if stop_docker_container(item.container_id):
+                    stopped += 1
+        parts = []
+        if killed:
+            parts.append(f"killed {killed} process(es)")
+        if stopped:
+            parts.append(f"stopped {stopped} container(s)")
+        summary = "Cleanup: " + ", ".join(parts) if parts else "No resources cleaned up"
+        self.call_from_thread(setattr, status, "message", f" {summary}")
+        self.call_from_thread(self.notify, summary, timeout=5)
+        self.call_from_thread(self.load_data)
 
     def _kill_node(self) -> None:
         node_table = self.query_one("#node-table", DataTable)

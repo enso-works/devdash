@@ -22,6 +22,9 @@ class Config:
     watched_ports: list[int] = field(default_factory=list)
     color_threshold_low: float = 50.0
     color_threshold_high: float = 80.0
+    cleanup_idle_threshold_cpu: float = 1.0
+    cleanup_idle_threshold_minutes: int = 10
+    cleanup_docker_stale_days: int = 7
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
@@ -41,4 +44,7 @@ class Config:
             watched_ports=list(data.get("watched_ports", [])),
             color_threshold_low=float(data.get("color_threshold_low", cls.color_threshold_low)),
             color_threshold_high=float(data.get("color_threshold_high", cls.color_threshold_high)),
+            cleanup_idle_threshold_cpu=float(data.get("cleanup_idle_threshold_cpu", cls.cleanup_idle_threshold_cpu)),
+            cleanup_idle_threshold_minutes=int(data.get("cleanup_idle_threshold_minutes", cls.cleanup_idle_threshold_minutes)),
+            cleanup_docker_stale_days=int(data.get("cleanup_docker_stale_days", cls.cleanup_docker_stale_days)),
         )

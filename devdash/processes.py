@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -206,6 +207,131 @@ def get_docker_containers() -> list[DockerContainer]:
 
     containers.sort(key=lambda c: (c.compose_project, c.compose_service, c.name))
     return containers
+
+
+@dataclass
+class CleanupSuggestion:
+    category: str  # "idle", "zombie", "stale_container", "orphan"
+    label: str
+    reason: str
+    action_type: str  # "kill" or "stop_container"
+    pid: int | None = None
+    container_id: str | None = None
+
+
+def _parse_docker_age_days(running_for: str) -> float:
+    text = running_for.lower().strip()
+    total_days = 0.0
+    for match in re.finditer(r"(\d+)\s*(second|minute|hour|day|week|month|year)s?", text):
+        value = int(match.group(1))
+        unit = match.group(2)
+        if unit == "second":
+            total_days += value / 86400
+        elif unit == "minute":
+            total_days += value / 1440
+        elif unit == "hour":
+            total_days += value / 24
+        elif unit == "day":
+            total_days += value
+        elif unit == "week":
+            total_days += value * 7
+        elif unit == "month":
+            total_days += value * 30
+        elif unit == "year":
+            total_days += value * 365
+    if total_days == 0 and re.search(r"about\s+(an?|one)\s+hour", text):
+        total_days = 1.0 / 24
+    return total_days
+
+
+def get_cleanup_suggestions(
+    node_procs: list[NodeProcess],
+    docker_containers: list[DockerContainer],
+    idle_tracker: dict[int, float],
+    idle_threshold_cpu: float = 1.0,
+    idle_threshold_minutes: int = 10,
+    docker_stale_days: int = 7,
+) -> list[CleanupSuggestion]:
+    suggestions: list[CleanupSuggestion] = []
+    flagged_pids: set[int] = set()
+    now = time.monotonic()
+
+    # Idle node processes
+    for proc in node_procs:
+        if proc.pid in idle_tracker:
+            idle_seconds = now - idle_tracker[proc.pid]
+            if idle_seconds >= idle_threshold_minutes * 60:
+                idle_min = int(idle_seconds // 60)
+                suggestions.append(CleanupSuggestion(
+                    category="idle",
+                    label=f"PID {proc.pid} ({proc.project or proc.name})",
+                    reason=f"CPU < {idle_threshold_cpu}% for {idle_min}m",
+                    action_type="kill",
+                    pid=proc.pid,
+                ))
+                flagged_pids.add(proc.pid)
+
+    # Zombie processes (from node procs list)
+    for proc in node_procs:
+        if proc.pid in flagged_pids:
+            continue
+        try:
+            p = psutil.Process(proc.pid)
+            if p.status() == psutil.STATUS_ZOMBIE:
+                suggestions.append(CleanupSuggestion(
+                    category="zombie",
+                    label=f"PID {proc.pid} ({proc.project or proc.name})",
+                    reason="Zombie process",
+                    action_type="kill",
+                    pid=proc.pid,
+                ))
+                flagged_pids.add(proc.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    # Orphan node processes (ppid=1 or parent doesn't exist)
+    for proc in node_procs:
+        if proc.pid in flagged_pids:
+            continue
+        try:
+            p = psutil.Process(proc.pid)
+            ppid = p.ppid()
+            if ppid <= 1:
+                suggestions.append(CleanupSuggestion(
+                    category="orphan",
+                    label=f"PID {proc.pid} ({proc.project or proc.name})",
+                    reason="Orphan process (parent exited)",
+                    action_type="kill",
+                    pid=proc.pid,
+                ))
+                flagged_pids.add(proc.pid)
+            else:
+                if not psutil.pid_exists(ppid):
+                    suggestions.append(CleanupSuggestion(
+                        category="orphan",
+                        label=f"PID {proc.pid} ({proc.project or proc.name})",
+                        reason=f"Parent PID {ppid} no longer exists",
+                        action_type="kill",
+                        pid=proc.pid,
+                    ))
+                    flagged_pids.add(proc.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    # Stale Docker containers
+    for container in docker_containers:
+        age = _parse_docker_age_days(container.created)
+        if age >= docker_stale_days:
+            age_str = f"{int(age)}d" if age >= 1 else f"{int(age * 24)}h"
+            suggestions.append(CleanupSuggestion(
+                category="stale_container",
+                label=f"{container.name} ({container.image})",
+                reason=f"Running for {age_str}",
+                action_type="stop_container",
+                container_id=container.container_id,
+            ))
+
+    return suggestions
 
 
 def kill_node_process(pid: int) -> bool:
