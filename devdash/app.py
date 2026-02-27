@@ -385,6 +385,18 @@ class DevDashApp(App):
             if msg:
                 self.call_from_thread(self.notify, msg, severity="information", timeout=8)
 
+    _TABLE_IDS = {
+        "node-table", "docker-table", "all-procs-table",
+        "claude-instances-table", "claude-projects-table",
+    }
+
+    def _focused_table_id(self) -> str:
+        """Return the focused DataTable's ID, falling back to _active_table_id."""
+        focused = self.focused
+        if isinstance(focused, DataTable) and focused.id in self._TABLE_IDS:
+            return focused.id
+        return self._active_table_id
+
     def _highlight_active_table(self) -> None:
         table_header_map = {
             "node-table": "node-header",
@@ -852,7 +864,7 @@ class DevDashApp(App):
     def _get_claude_selected_path(self) -> str | None:
         if self._current_tab != "claude":
             return None
-        table_id = self._active_table_id
+        table_id = self._focused_table_id()
         table = self.query_one(f"#{table_id}", DataTable)
         try:
             row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
@@ -951,7 +963,7 @@ class DevDashApp(App):
             self.notify(f"Failed: {e}", severity="error", timeout=5)
 
     def action_session_browser(self) -> None:
-        if self._current_tab != "claude" or self._active_table_id != "claude-projects-table":
+        if self._current_tab != "claude" or self._focused_table_id() != "claude-projects-table":
             return
         path = self._get_claude_selected_path()
         if not path:
@@ -1048,13 +1060,14 @@ class DevDashApp(App):
         bar.update(f"{line1}\n{line2}\n{line3}")
 
     def action_toggle_select(self) -> None:
-        table = self.query_one(f"#{self._active_table_id}", DataTable)
+        active = self._focused_table_id()
+        table = self.query_one(f"#{active}", DataTable)
         try:
             row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
         except Exception:
             return
         key = row_key.value
-        if self._active_table_id == "docker-table":
+        if active == "docker-table":
             if key in self._selected_containers:
                 self._selected_containers.discard(key)
             else:
@@ -1099,11 +1112,12 @@ class DevDashApp(App):
         if has_selected:
             self._batch_kill()
             return
-        if self._active_table_id == "node-table":
+        active = self._focused_table_id()
+        if active == "node-table":
             self._kill_node()
-        elif self._active_table_id == "docker-table":
+        elif active == "docker-table":
             self._stop_docker()
-        elif self._active_table_id == "all-procs-table":
+        elif active == "all-procs-table":
             self._kill_general()
 
     def _batch_kill(self) -> None:
@@ -1139,7 +1153,7 @@ class DevDashApp(App):
         self.call_from_thread(self.load_data)
 
     def action_logs(self) -> None:
-        if self._active_table_id != "docker-table":
+        if self._focused_table_id() != "docker-table":
             self.notify("Select a Docker container first", severity="warning")
             return
         docker_table = self.query_one("#docker-table", DataTable)
@@ -1157,16 +1171,17 @@ class DevDashApp(App):
             self.push_screen(LogViewerScreen(container_id, container.name))
 
     def action_details(self) -> None:
-        if self._active_table_id == "docker-table":
+        active = self._focused_table_id()
+        if active == "docker-table":
             self.notify("Details not available for Docker containers", severity="warning")
             return
-        if self._active_table_id == "claude-projects-table":
+        if active == "claude-projects-table":
             path = self._get_claude_selected_path()
             if path:
                 name = Path(path).name
                 self.push_screen(ClaudeProjectDetailScreen(path, name))
             return
-        table_id = self._active_table_id
+        table_id = active
         table = self.query_one(f"#{table_id}", DataTable)
         try:
             row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)

@@ -400,10 +400,10 @@ class CleanupScreen(ModalScreen[list | None]):
     """
 
     BINDINGS = [
-        Binding("space", "toggle_item", "Toggle", show=False),
+        Binding("space", "toggle_item", "Toggle", show=False, priority=True),
         Binding("a", "select_all", "Select All", show=False),
         Binding("n", "select_none", "Clear", show=False),
-        Binding("enter", "execute", "Execute", show=False),
+        Binding("enter", "execute", "Execute", show=False, priority=True),
         Binding("escape", "cancel", "Cancel", show=False),
         Binding("q", "cancel", "Cancel", show=False),
     ]
