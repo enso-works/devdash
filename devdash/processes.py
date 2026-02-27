@@ -334,6 +334,271 @@ def get_cleanup_suggestions(
     return suggestions
 
 
+@dataclass
+class PortOwner:
+    kind: str  # "node" or "docker"
+    label: str
+    group: str
+    pid: int | None = None
+    container_id: str | None = None
+    ports: list[int] = field(default_factory=list)
+
+
+@dataclass
+class DependencyEdge:
+    from_label: str
+    from_kind: str
+    from_group: str
+    to_label: str
+    to_kind: str
+    to_group: str
+    port: int
+
+
+def _parse_host_ports_from_string(ports_str: str) -> list[int]:
+    """Extract host-side ports from Docker port strings like '0.0.0.0:5436->5432/tcp'."""
+    host_ports = []
+    for match in re.finditer(r"(?:\d+\.\d+\.\d+\.\d+)?:(\d+)->", ports_str):
+        try:
+            host_ports.append(int(match.group(1)))
+        except ValueError:
+            continue
+    return host_ports
+
+
+def _get_docker_host_ports(containers: list[DockerContainer]) -> dict[str, list[int]]:
+    """Get accurate host port mappings via docker inspect, fall back to string parsing."""
+    if not containers:
+        return {}
+    ids = [c.container_id for c in containers]
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .NetworkSettings.Ports}}"] + ids,
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            port_map: dict[str, list[int]] = {}
+            lines = result.stdout.strip().splitlines()
+            for cid, line in zip(ids, lines):
+                try:
+                    ports_data = json.loads(line)
+                    host_ports: list[int] = []
+                    for bindings in (ports_data or {}).values():
+                        for b in bindings or []:
+                            hp = b.get("HostPort")
+                            if hp:
+                                host_ports.append(int(hp))
+                    port_map[cid] = host_ports
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    port_map[cid] = []
+            return port_map
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return {c.container_id: _parse_host_ports_from_string(c.ports) for c in containers}
+
+
+def get_dependency_graph(
+    node_procs: list[NodeProcess],
+    docker_containers: list[DockerContainer],
+) -> tuple[list[PortOwner], list[DependencyEdge]]:
+    """Return (port_owners, edges) by scanning TCP connections."""
+    docker_ports = _get_docker_host_ports(docker_containers)
+
+    port_to_owner: dict[int, PortOwner] = {}
+    owners: list[PortOwner] = []
+
+    for proc in node_procs:
+        label = proc.project or proc.name
+        group = proc.project or ""
+        owner = PortOwner(kind="node", label=label, group=group, pid=proc.pid, ports=proc.ports)
+        owners.append(owner)
+        for port in proc.ports:
+            port_to_owner[port] = owner
+
+    for container in docker_containers:
+        label = container.compose_service or container.name
+        group = container.compose_project or ""
+        host_ports = docker_ports.get(container.container_id, [])
+        owner = PortOwner(
+            kind="docker", label=label, group=group,
+            container_id=container.container_id, ports=host_ports,
+        )
+        owners.append(owner)
+        for port in host_ports:
+            if port not in port_to_owner:
+                port_to_owner[port] = owner
+
+    seen: set[tuple[str, str, int]] = set()
+    edges: list[DependencyEdge] = []
+
+    for proc in node_procs:
+        source_label = proc.project or proc.name
+        source_group = proc.project or ""
+        try:
+            connections = psutil.Process(proc.pid).net_connections(kind="tcp")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        for conn in connections:
+            if conn.status != "ESTABLISHED" or not conn.raddr:
+                continue
+            remote_port = conn.raddr.port
+            if remote_port not in port_to_owner:
+                continue
+            target = port_to_owner[remote_port]
+            if target.pid == proc.pid:
+                continue
+            key = (source_label, target.label, remote_port)
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append(DependencyEdge(
+                from_label=source_label,
+                from_kind="node",
+                from_group=source_group,
+                to_label=target.label,
+                to_kind=target.kind,
+                to_group=target.group,
+                port=remote_port,
+            ))
+
+    edges.sort(key=lambda e: (e.from_group, e.from_label, e.to_label))
+    return owners, edges
+
+
+@dataclass
+class ActivityHeatmapData:
+    weekly_heatmap: list[list[int]]  # 7 (Mon=0) x 24 hours -> message count
+    week_day_labels: list[str]
+    project_times: list[tuple[str, float]]  # (project_name, hours) sorted desc
+    daily_messages: list[tuple[str, int]]  # full history (date, count)
+    daily_sessions: list[tuple[str, int]]  # full history (date, count)
+    daily_tokens: list[tuple[str, int]]  # full history (date, count)
+    total_sessions: int
+    total_messages: int
+    total_hours: float
+
+
+def get_activity_heatmap_data() -> ActivityHeatmapData | None:
+    """Build activity heatmap from Claude stats and session data."""
+    from datetime import timedelta
+
+    claude_dir = Path.home() / ".claude"
+    projects_dir = claude_dir / "projects"
+    stats_file = claude_dir / "stats-cache.json"
+
+    if not stats_file.is_file() and not projects_dir.is_dir():
+        return None
+
+    # 1. Parse stats-cache.json for full daily activity and tokens
+    daily_messages: list[tuple[str, int]] = []
+    daily_sessions: list[tuple[str, int]] = []
+    daily_tokens: list[tuple[str, int]] = []
+    total_sessions = 0
+    total_messages = 0
+
+    if stats_file.is_file():
+        try:
+            data = json.loads(stats_file.read_text(encoding="utf-8"))
+            total_sessions = data.get("totalSessions", 0)
+            total_messages = data.get("totalMessages", 0)
+            for entry in data.get("dailyActivity") or []:
+                date = entry.get("date", "")
+                daily_messages.append((date, entry.get("messageCount", 0)))
+                daily_sessions.append((date, entry.get("sessionCount", 0)))
+            for entry in data.get("dailyModelTokens") or []:
+                date = entry.get("date", "")
+                tokens = entry.get("inputTokens", 0) + entry.get("outputTokens", 0)
+                daily_tokens.append((date, tokens))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 2. Build current-week 7x24 heatmap from session timestamps
+    weekly_heatmap = [[0] * 24 for _ in range(7)]
+    week_day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    now = datetime.now(timezone.utc)
+    week_start = now - timedelta(days=now.weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    project_hours_map: dict[str, float] = {}
+    total_hours = 0.0
+
+    if projects_dir.is_dir():
+        for proj_dir in projects_dir.iterdir():
+            if not proj_dir.is_dir():
+                continue
+            index_file = proj_dir / "sessions-index.json"
+            if not index_file.is_file():
+                continue
+            try:
+                idx_data = json.loads(index_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            for entry in idx_data.get("entries") or []:
+                created_str = entry.get("created", "")
+                modified_str = entry.get("modified", "")
+                msg_count = entry.get("messageCount", 0)
+                proj_path = entry.get("projectPath", "")
+                proj_name = Path(proj_path).name if proj_path else proj_dir.name
+
+                try:
+                    created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    continue
+
+                # Current week heatmap only
+                if created >= week_start:
+                    dow = created.weekday()
+                    hour = created.hour
+                    weekly_heatmap[dow][hour] += msg_count
+
+                # Project hours from session duration
+                try:
+                    modified = datetime.fromisoformat(modified_str.replace("Z", "+00:00"))
+                    duration_hours = max((modified - created).total_seconds() / 3600, 0)
+                except (ValueError, AttributeError):
+                    duration_hours = 0.0
+                if proj_name:
+                    project_hours_map[proj_name] = project_hours_map.get(proj_name, 0) + duration_hours
+                total_hours += duration_hours
+
+    # 3. Scan session-meta for per-project duration_minutes (more accurate if available)
+    meta_dir = claude_dir / "usage-data" / "session-meta"
+    if meta_dir.is_dir():
+        meta_project_hours: dict[str, float] = {}
+        for meta_file in meta_dir.iterdir():
+            if meta_file.suffix != ".json":
+                continue
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            proj_path = meta.get("project_path", "")
+            duration_min = meta.get("duration_minutes", 0)
+            if proj_path and duration_min:
+                proj_name = Path(proj_path).name
+                meta_project_hours[proj_name] = meta_project_hours.get(proj_name, 0) + duration_min / 60
+        if meta_project_hours:
+            project_hours_map = meta_project_hours
+            total_hours = sum(meta_project_hours.values())
+
+    project_times = sorted(project_hours_map.items(), key=lambda x: x[1], reverse=True)
+
+    if not daily_messages and not any(any(row) for row in weekly_heatmap) and not project_times:
+        return None
+
+    return ActivityHeatmapData(
+        weekly_heatmap=weekly_heatmap,
+        week_day_labels=week_day_labels,
+        project_times=project_times,
+        daily_messages=daily_messages,
+        daily_sessions=daily_sessions,
+        daily_tokens=daily_tokens,
+        total_sessions=total_sessions,
+        total_messages=total_messages,
+        total_hours=total_hours,
+    )
+
+
 def kill_node_process(pid: int) -> bool:
     try:
         proc = psutil.Process(pid)

@@ -19,9 +19,11 @@ from textual.widgets import (
 
 from devdash.config import Config
 from devdash.screens import (
+    ActivityHeatmapScreen,
     CleanupScreen,
     ConfirmScreen,
     ClaudeProjectDetailScreen,
+    DependencyGraphScreen,
     LaunchMenuScreen,
     LogViewerScreen,
     ProcessDetailScreen,
@@ -116,6 +118,7 @@ class DevDashCommands(Provider):
             ("Export snapshot", "Export current data to JSON", "action_export"),
             ("Toggle selection", "Select/deselect current row", "action_toggle_select"),
             ("Cleanup suggestions", "Detect and clean up stale/idle resources", "action_cleanup"),
+            ("Dependency graph", "Show process/container dependencies", "action_dep_graph"),
             ("Quit", "Exit devdash", "action_quit"),
         ]
         app = self.app
@@ -124,6 +127,7 @@ class DevDashCommands(Provider):
                 ("Switch to Claude tab", "Show Claude Code instances and projects", "action_tab_claude"),
                 ("Launch menu", "Open launch menu for selected project", "action_launch_or_details"),
                 ("Session browser", "Browse sessions for selected project", "action_session_browser"),
+                ("Activity heatmap", "Show coding activity analytics", "action_activity_heatmap"),
             ])
         return cmds
 
@@ -273,6 +277,8 @@ class DevDashApp(App):
         Binding("enter", "launch_or_details", "Open", show=False, priority=False),
         Binding("s", "session_browser", "Sessions", show=False),
         Binding("c", "cleanup", "Cleanup"),
+        Binding("g", "dep_graph", "Graph"),
+        Binding("h", "activity_heatmap", "Heatmap", show=False),
     ]
 
     node_procs: list[NodeProcess] = []
@@ -1255,6 +1261,14 @@ class DevDashApp(App):
         self.call_from_thread(setattr, status, "message", f" {summary}")
         self.call_from_thread(self.notify, summary, timeout=5)
         self.call_from_thread(self.load_data)
+
+    def action_dep_graph(self) -> None:
+        self.push_screen(DependencyGraphScreen(self.node_procs, self.docker_containers))
+
+    def action_activity_heatmap(self) -> None:
+        if not self._has_claude:
+            return
+        self.push_screen(ActivityHeatmapScreen())
 
     def _kill_node(self) -> None:
         node_table = self.query_one("#node-table", DataTable)

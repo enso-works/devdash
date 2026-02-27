@@ -22,6 +22,352 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 
+class DependencyGraphScreen(ModalScreen[None]):
+    CSS = """
+    DependencyGraphScreen {
+        align: center middle;
+    }
+
+    #depgraph-dialog {
+        width: 90%;
+        height: 80%;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #depgraph-title {
+        height: 1;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #depgraph-output {
+        height: 1fr;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=True),
+        Binding("q", "close", "Close", show=False),
+    ]
+
+    def __init__(self, node_procs: list, docker_containers: list) -> None:
+        super().__init__()
+        self._node_procs = node_procs
+        self._docker_containers = docker_containers
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="depgraph-dialog"):
+            yield Static("Dependency Graph", id="depgraph-title")
+            yield RichLog(id="depgraph-output", highlight=True, markup=False)
+
+    def on_mount(self) -> None:
+        self._load_graph()
+
+    @work(thread=True)
+    def _load_graph(self) -> None:
+        from devdash.processes import get_dependency_graph
+
+        owners, edges = get_dependency_graph(self._node_procs, self._docker_containers)
+        self.call_from_thread(self._render_graph, owners, edges)
+
+    def _render_graph(self, owners: list, edges: list) -> None:
+        from collections import defaultdict
+        from rich.text import Text as RichText
+
+        log = self.query_one("#depgraph-output", RichLog)
+
+        if not owners:
+            log.write("No running processes or containers detected.")
+            log.write("")
+            log.write("The dependency graph shows TCP connections between")
+            log.write("Node.js processes and Docker containers.")
+            log.write("Start some services to see their connections here.")
+            return
+
+        if not edges:
+            log.write("No connections detected between services.")
+            log.write("")
+            log.write(RichText("  Running entities:", style="bold"))
+            for owner in owners:
+                kind_style = "cyan" if owner.kind == "node" else "yellow"
+                ports = ", ".join(f":{p}" for p in owner.ports) if owner.ports else ""
+                line = RichText()
+                line.append(f"  {owner.label}", style=kind_style)
+                if ports:
+                    line.append(f" {ports}", style="green")
+                if owner.group:
+                    line.append(f" ({owner.group})", style="dim")
+                log.write(line)
+            return
+
+        # Group edges by source group, then source label
+        by_group: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+        for edge in edges:
+            group = edge.from_group or "(ungrouped)"
+            by_group[group][edge.from_label].append(edge)
+
+        for group in sorted(by_group):
+            if len(by_group) > 1:
+                log.write(RichText(f"  [{group}]", style="bold"))
+
+            sources = by_group[group]
+            source_list = sorted(sources.keys())
+            for si, source in enumerate(source_list):
+                source_edges = sorted(sources[source], key=lambda e: e.to_label)
+                is_last_source = si == len(source_list) - 1
+                prefix = "  \u2514\u2500\u2500 " if is_last_source else "  \u251c\u2500\u2500 "
+                cont = "      " if is_last_source else "  \u2502   "
+
+                kind_style = "cyan" if source_edges[0].from_kind == "node" else "yellow"
+                header = RichText()
+                header.append(prefix, style="dim")
+                header.append(source, style=kind_style)
+                log.write(header)
+
+                for ei, edge in enumerate(source_edges):
+                    is_last_edge = ei == len(source_edges) - 1
+                    edge_prefix = cont + ("\u2514\u2500\u2500 " if is_last_edge else "\u251c\u2500\u2500 ")
+                    target_style = "cyan" if edge.to_kind == "node" else "yellow"
+                    line = RichText()
+                    line.append(edge_prefix, style="dim")
+                    line.append(edge.to_label, style=target_style)
+                    line.append(f" :{edge.port}", style="green")
+                    log.write(line)
+
+            log.write("")
+
+        # Show standalone owners not involved in any edge
+        connected = set()
+        for edge in edges:
+            connected.add(edge.from_label)
+            connected.add(edge.to_label)
+        standalone = [o for o in owners if o.label not in connected]
+        if standalone:
+            log.write(RichText("  Standalone (no connections):", style="dim bold"))
+            for owner in standalone:
+                kind_style = "cyan" if owner.kind == "node" else "yellow"
+                log.write(RichText(f"    {owner.label}", style=kind_style))
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class ActivityHeatmapScreen(ModalScreen[None]):
+    CSS = """
+    ActivityHeatmapScreen {
+        align: center middle;
+    }
+
+    #heatmap-dialog {
+        width: 90%;
+        height: 80%;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #heatmap-title {
+        height: 1;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #heatmap-log, #timetrack-log, #timeline-log {
+        height: 1fr;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=True),
+        Binding("q", "close", "Close", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="heatmap-dialog"):
+            yield Static("Activity Heatmap", id="heatmap-title")
+            with TabbedContent():
+                with TabPane("Heatmap", id="tab-heatmap"):
+                    yield RichLog(id="heatmap-log", highlight=True, markup=False)
+                with TabPane("Time Tracking", id="tab-timetrack"):
+                    yield RichLog(id="timetrack-log", highlight=True, markup=False)
+                with TabPane("Timeline", id="tab-timeline"):
+                    yield RichLog(id="timeline-log", highlight=True, markup=False)
+
+    def on_mount(self) -> None:
+        self._load_data()
+
+    @work(thread=True)
+    def _load_data(self) -> None:
+        from devdash.processes import get_activity_heatmap_data
+
+        data = get_activity_heatmap_data()
+        self.call_from_thread(self._render_all, data)
+
+    def _render_all(self, data) -> None:
+        if data is None:
+            log = self.query_one("#heatmap-log", RichLog)
+            log.write("No Claude activity data found.")
+            log.write("")
+            log.write("Activity data is collected from ~/.claude/ directory.")
+            log.write("Use Claude Code to generate activity data.")
+            return
+        self._render_heatmap(data)
+        self._render_time_tracking(data)
+        self._render_timeline(data)
+
+    def _render_heatmap(self, data) -> None:
+        from rich.text import Text as RichText
+
+        log = self.query_one("#heatmap-log", RichLog)
+
+        # Header row with hour labels
+        header = RichText("         ", style="dim")
+        for h in range(24):
+            header.append(f"{h:>2d} ", style="dim")
+        log.write(header)
+
+        max_val = max(
+            (data.weekly_heatmap[d][h] for d in range(7) for h in range(24)),
+            default=1,
+        )
+        if max_val == 0:
+            max_val = 1
+
+        def cell_style(val: int) -> tuple[str, str]:
+            """Return (display_text, color) based on intensity."""
+            if val == 0:
+                return " .", "grey37"
+            ratio = val / max_val
+            text = f"{val:>2d}" if val < 100 else " +"
+            if ratio <= 0.25:
+                return text, "dark_green"
+            elif ratio <= 0.6:
+                return text, "green"
+            else:
+                return text, "bright_green"
+
+        for d in range(7):
+            row = RichText(f"  {data.week_day_labels[d]:>3s}  ", style="bold")
+            for h in range(24):
+                val = data.weekly_heatmap[d][h]
+                text, style = cell_style(val)
+                row.append(f"{text} ", style=style)
+            log.write(row)
+
+        log.write("")
+        log.write(RichText(
+            f"  Total: {data.total_messages} messages, {data.total_sessions} sessions, {data.total_hours:.1f}h",
+            style="bold",
+        ))
+
+    def _render_time_tracking(self, data) -> None:
+        from rich.text import Text as RichText
+
+        log = self.query_one("#timetrack-log", RichLog)
+
+        if not data.project_times:
+            log.write("No per-project time data available.")
+            return
+
+        top = data.project_times[:20]
+        max_hours = top[0][1] if top else 1
+        if max_hours == 0:
+            max_hours = 1
+        bar_width = 30
+
+        log.write(RichText("  Project Time (top 20)", style="bold"))
+        log.write("")
+
+        max_name = max(len(name) for name, _ in top) if top else 10
+        max_name = min(max_name, 25)
+
+        for name, hours in top:
+            short_name = name[:max_name].ljust(max_name)
+            filled = int(hours / max_hours * bar_width)
+            empty = bar_width - filled
+            hours_str = f"{hours:.1f}h" if hours >= 1 else f"{hours * 60:.0f}m"
+            line = RichText()
+            line.append(f"  {short_name}  ", style="bold")
+            line.append("\u2588" * filled, style="green")
+            line.append("\u2591" * empty, style="dim")
+            line.append(f" {hours_str}", style="dim")
+            log.write(line)
+
+        log.write("")
+        total = sum(h for _, h in data.project_times)
+        log.write(RichText(f"  Total: {total:.1f}h across {len(data.project_times)} projects", style="dim"))
+
+    def _render_timeline(self, data) -> None:
+        from rich.text import Text as RichText
+
+        log = self.query_one("#timeline-log", RichLog)
+        blocks = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+
+        def sparkline(values: list[int]) -> str:
+            if not values:
+                return ""
+            max_v = max(values) if values else 1
+            if max_v == 0:
+                return blocks[0] * len(values)
+            return "".join(
+                blocks[min(int(v / max_v * 7) + (1 if v > 0 else 0), 8)]
+                for v in values
+            )
+
+        def stats_section(label: str, pairs: list[tuple[str, int]]) -> None:
+            values = [v for _, v in pairs]
+            if not values:
+                return
+            spark = sparkline(values)
+            avg = sum(values) / len(values)
+            mx = max(values)
+            total = sum(values)
+            log.write(RichText(f"  {label}", style="bold"))
+            log.write(RichText(f"  {spark}", style="green"))
+            log.write(RichText(
+                f"  avg: {avg:.0f}  max: {mx}  total: {total:,}",
+                style="dim",
+            ))
+            if len(pairs) > 1:
+                log.write(RichText(f"  {pairs[0][0]} to {pairs[-1][0]}", style="dim"))
+            log.write("")
+
+        if not data.daily_messages and not data.daily_sessions and not data.daily_tokens:
+            log.write("No timeline data available.")
+            return
+
+        log.write(RichText("  Activity Timeline", style="bold"))
+        log.write("")
+
+        stats_section("Messages / day", data.daily_messages)
+        stats_section("Sessions / day", data.daily_sessions)
+
+        if data.daily_tokens:
+            token_values = [t for _, t in data.daily_tokens]
+            token_k = [t // 1000 for t in token_values]
+            if any(token_k):
+                spark = sparkline(token_k)
+                avg = sum(token_k) / len(token_k)
+                mx = max(token_k)
+                total = sum(token_k)
+                log.write(RichText("  Tokens / day (K)", style="bold"))
+                log.write(RichText(f"  {spark}", style="green"))
+                log.write(RichText(
+                    f"  avg: {avg:.0f}K  max: {mx}K  total: {total:,}K",
+                    style="dim",
+                ))
+                if len(data.daily_tokens) > 1:
+                    log.write(RichText(
+                        f"  {data.daily_tokens[0][0]} to {data.daily_tokens[-1][0]}",
+                        style="dim",
+                    ))
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class CleanupScreen(ModalScreen[list | None]):
     CSS = """
     CleanupScreen {
