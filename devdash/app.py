@@ -5,7 +5,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import (
     DataTable,
@@ -32,6 +32,7 @@ from devdash.screens import (
 from devdash.processes import (
     ClaudeInstance,
     ClaudeProject,
+    ClaudeSessionEntry,
     ClaudeStats,
     CleanupSuggestion,
     DockerContainer,
@@ -40,6 +41,7 @@ from devdash.processes import (
     SystemStats,
     _format_bytes_rate,
     get_all_processes,
+    get_all_recent_sessions,
     get_claude_instances,
     get_claude_projects,
     get_claude_stats,
@@ -175,7 +177,7 @@ class DevDashApp(App):
         background: dodgerblue;
     }
 
-    #node-table, #docker-table, #claude-instances-table, #claude-projects-table {
+    #node-table, #docker-table, #claude-instances-table, #claude-projects-table, #claude-sessions-table {
         height: 1fr;
         min-height: 5;
     }
@@ -258,6 +260,18 @@ class DevDashApp(App):
         background: $surface;
         color: $text-muted;
     }
+
+    #claude-split {
+        height: 1fr;
+    }
+
+    #claude-left-pane {
+        width: 50%;
+    }
+
+    #claude-right-pane {
+        width: 50%;
+    }
     """
 
     TITLE = "devdash"
@@ -288,6 +302,7 @@ class DevDashApp(App):
     claude_instances: list[ClaudeInstance] = []
     claude_projects: list[ClaudeProject] = []
     claude_stats: ClaudeStats | None = None
+    claude_recent_sessions: list[ClaudeSessionEntry] = []
     _current_tab: str = "dev"
     _active_table_id: str = "node-table"
     _sort_state: dict[str, tuple[int, bool]] = {}  # table_id -> (col_index, reverse)
@@ -336,10 +351,15 @@ class DevDashApp(App):
             if self._has_claude:
                 with TabPane("[3] Claude", id="claude"):
                     yield Static("", id="claude-stats-bar")
-                    yield Static(" Running Instances", id="claude-instances-header", classes="section-header active")
-                    yield DataTable(id="claude-instances-table")
-                    yield Static(" Projects", id="claude-projects-header", classes="section-header")
-                    yield DataTable(id="claude-projects-table")
+                    with Horizontal(id="claude-split"):
+                        with Vertical(id="claude-left-pane"):
+                            yield Static(" Running Instances", id="claude-instances-header", classes="section-header active")
+                            yield DataTable(id="claude-instances-table")
+                            yield Static(" Projects", id="claude-projects-header", classes="section-header")
+                            yield DataTable(id="claude-projects-table")
+                        with Vertical(id="claude-right-pane"):
+                            yield Static(" Recent Sessions", id="claude-sessions-header", classes="section-header")
+                            yield DataTable(id="claude-sessions-table")
         yield StatusBar("Loading...", id="status-bar")
         yield Footer()
 
@@ -365,6 +385,11 @@ class DevDashApp(App):
             claude_proj_table.cursor_type = "row"
             claude_proj_table.add_columns("Project", "Sessions", "Messages", "Last Active", "Status", "Path")
 
+            claude_sess_table = self.query_one("#claude-sessions-table", DataTable)
+            claude_sess_table.cursor_type = "row"
+            claude_sess_table.add_columns("Project", "Summary", "Msgs", "Branch", "Created", "Modified")
+            self._sort_state["claude-sessions-table"] = (5, True)  # Modified desc
+
         self._highlight_active_table()
         self.load_data()
         self.set_interval(self._config.refresh_rate, self.load_data)
@@ -387,7 +412,7 @@ class DevDashApp(App):
 
     _TABLE_IDS = {
         "node-table", "docker-table", "all-procs-table",
-        "claude-instances-table", "claude-projects-table",
+        "claude-instances-table", "claude-projects-table", "claude-sessions-table",
     }
 
     def _focused_table_id(self) -> str:
@@ -404,6 +429,7 @@ class DevDashApp(App):
             "all-procs-table": "procs-header",
             "claude-instances-table": "claude-instances-header",
             "claude-projects-table": "claude-projects-header",
+            "claude-sessions-table": "claude-sessions-header",
         }
         for table_id, header_id in table_header_map.items():
             try:
@@ -463,10 +489,12 @@ class DevDashApp(App):
             else:
                 self._active_table_id = "node-table"
         elif self._current_tab == "claude":
-            if self._active_table_id == "claude-instances-table":
-                self._active_table_id = "claude-projects-table"
-            else:
-                self._active_table_id = "claude-instances-table"
+            cycle = ["claude-instances-table", "claude-projects-table", "claude-sessions-table"]
+            try:
+                idx = cycle.index(self._active_table_id)
+                self._active_table_id = cycle[(idx + 1) % len(cycle)]
+            except ValueError:
+                self._active_table_id = cycle[0]
         self._highlight_active_table()
 
     def action_toggle_filter(self) -> None:
@@ -583,11 +611,13 @@ class DevDashApp(App):
         claude_instances = None
         claude_projects = None
         claude_stats = None
+        claude_sessions = None
         if self._has_claude:
             claude_instances = get_claude_instances()
             claude_projects = get_claude_projects()
             claude_stats = get_claude_stats()
-        self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats, claude_instances, claude_projects, claude_stats)
+            claude_sessions = get_all_recent_sessions()
+        self.call_from_thread(self._update_all, node_procs, docker_containers, all_procs, stats, claude_instances, claude_projects, claude_stats, claude_sessions)
 
     def _update_all(
         self,
@@ -598,6 +628,7 @@ class DevDashApp(App):
         claude_instances: list[ClaudeInstance] | None = None,
         claude_projects: list[ClaudeProject] | None = None,
         claude_stats: ClaudeStats | None = None,
+        claude_sessions: list[ClaudeSessionEntry] | None = None,
     ) -> None:
         self._check_notifications(node_procs, docker_containers)
         self._update_idle_tracker(node_procs)
@@ -612,11 +643,13 @@ class DevDashApp(App):
             self.claude_projects = claude_projects
         if claude_stats is not None:
             self.claude_stats = claude_stats
+        if claude_sessions is not None:
+            self.claude_recent_sessions = claude_sessions
 
         self._update_dev_tables(node_procs, docker_containers)
         self._update_system_tab(all_procs, stats)
         if self._has_claude:
-            self._update_claude_tab(self.claude_instances, self.claude_projects)
+            self._update_claude_tab(self.claude_instances, self.claude_projects, self.claude_recent_sessions)
             self._update_claude_stats_bar(self.claude_stats)
 
         status = self.query_one("#status-bar", StatusBar)
@@ -802,13 +835,18 @@ class DevDashApp(App):
         procs_header.update(f" All Processes ({proc_count}, by memory)")
 
     def _update_claude_tab(
-        self, claude_instances: list[ClaudeInstance], claude_projects: list[ClaudeProject]
+        self,
+        claude_instances: list[ClaudeInstance],
+        claude_projects: list[ClaudeProject],
+        claude_sessions: list[ClaudeSessionEntry] | None = None,
     ) -> None:
         inst_table = self.query_one("#claude-instances-table", DataTable)
         proj_table = self.query_one("#claude-projects-table", DataTable)
+        sess_table = self.query_one("#claude-sessions-table", DataTable)
 
         inst_cursor = inst_table.cursor_row
         proj_cursor = proj_table.cursor_row
+        sess_cursor = sess_table.cursor_row
 
         inst_table.clear()
         inst_count = 0
@@ -842,6 +880,25 @@ class DevDashApp(App):
                 proj_table.add_row(*cells, key=proj.path)
                 proj_count += 1
 
+        sess_table.clear()
+        sess_count = 0
+        for sess in claude_sessions or []:
+            project_name = Path(sess.project_path).name if sess.project_path else "-"
+            summary = sess.summary or sess.first_prompt or "-"
+            if len(summary) > 60:
+                summary = summary[:57] + "..."
+            cells = [
+                project_name,
+                summary,
+                str(sess.message_count),
+                sess.git_branch or "-",
+                sess.created,
+                sess.modified,
+            ]
+            if self._row_matches_filter(cells):
+                sess_table.add_row(*cells, key=sess.session_id)
+                sess_count += 1
+
         if inst_count and inst_cursor is not None:
             try:
                 inst_table.move_cursor(row=min(inst_cursor, inst_count - 1))
@@ -852,14 +909,22 @@ class DevDashApp(App):
                 proj_table.move_cursor(row=min(proj_cursor, proj_count - 1))
             except Exception:
                 pass
+        if sess_count and sess_cursor is not None:
+            try:
+                sess_table.move_cursor(row=min(sess_cursor, sess_count - 1))
+            except Exception:
+                pass
 
         self._apply_sort("claude-instances-table")
         self._apply_sort("claude-projects-table")
+        self._apply_sort("claude-sessions-table")
 
         inst_header = self.query_one("#claude-instances-header", Static)
         inst_header.update(f" Running Instances ({inst_count})")
         proj_header = self.query_one("#claude-projects-header", Static)
         proj_header.update(f" Projects ({proj_count})")
+        sess_header = self.query_one("#claude-sessions-header", Static)
+        sess_header.update(f" Recent Sessions ({sess_count})")
 
     def _get_claude_selected_path(self) -> str | None:
         if self._current_tab != "claude":
@@ -885,6 +950,14 @@ class DevDashApp(App):
             if path.startswith("~"):
                 path = str(Path.home()) + path[1:]
             return path
+        elif table_id == "claude-sessions-table":
+            session_id = row_key.value
+            sess = next((s for s in self.claude_recent_sessions if s.session_id == session_id), None)
+            if sess and sess.project_path:
+                path = sess.project_path
+                if path.startswith("~"):
+                    path = str(Path.home()) + path[1:]
+                return path
         return None
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -905,6 +978,11 @@ class DevDashApp(App):
             if path.startswith("~"):
                 path = str(Path.home()) + path[1:]
             self._open_launch_menu(path)
+        elif table_id == "claude-sessions-table":
+            session_id = event.row_key.value
+            sess = next((s for s in self.claude_recent_sessions if s.session_id == session_id), None)
+            if sess and sess.project_path:
+                self._on_session_selected(session_id, sess.project_path)
 
     def action_launch_or_details(self) -> None:
         if self._current_tab == "claude":

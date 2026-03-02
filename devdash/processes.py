@@ -983,6 +983,15 @@ def _format_iso_datetime(iso: str) -> str:
         return iso[:16] if iso else ""
 
 
+def _format_iso_sortable(iso: str) -> str:
+    """Format ISO datetime as YYYY-MM-DD HH:MM for correct lexicographic sorting."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, AttributeError):
+        return iso[:16] if iso else ""
+
+
 def get_claude_stats() -> ClaudeStats | None:
     stats_file = Path.home() / ".claude" / "stats-cache.json"
     if not stats_file.is_file():
@@ -1044,6 +1053,39 @@ def get_project_sessions(project_path: str) -> list[ClaudeSessionEntry]:
 
     entries.sort(key=lambda x: x.modified, reverse=True)
     return entries
+
+
+def get_all_recent_sessions() -> list[ClaudeSessionEntry]:
+    """Return the 50 most recent sessions across all projects."""
+    projects_dir = Path.home() / ".claude" / "projects"
+    if not projects_dir.is_dir():
+        return []
+
+    raw_entries: list[tuple[str, ClaudeSessionEntry]] = []
+
+    for index_file in projects_dir.glob("*/sessions-index.json"):
+        try:
+            data = json.loads(index_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        for e in data.get("entries") or []:
+            raw_modified = e.get("modified", "")
+            entry = ClaudeSessionEntry(
+                session_id=e.get("sessionId", ""),
+                summary=e.get("summary", ""),
+                first_prompt=e.get("firstPrompt", ""),
+                message_count=e.get("messageCount", 0),
+                git_branch=e.get("gitBranch", ""),
+                created=_format_iso_sortable(e.get("created", "")),
+                modified=_format_iso_sortable(raw_modified),
+                project_path=e.get("projectPath", ""),
+                is_sidechain=e.get("isSidechain", False),
+            )
+            raw_entries.append((raw_modified, entry))
+
+    raw_entries.sort(key=lambda x: x[0], reverse=True)
+    return [entry for _, entry in raw_entries[:50]]
 
 
 def get_project_detail(project_path: str) -> ClaudeProjectDetail:
