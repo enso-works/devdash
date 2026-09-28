@@ -21,16 +21,25 @@ enum Entry {
 struct DevDashBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = Store()
+    @State private var disk = DiskStore()
 
     var body: some Scene {
         MenuBarExtra {
             PopoverView()
                 .environment(store)
+                .environment(disk)
                 .onAppear { appDelegate.store = store }
         } label: {
             MenuBarLabel(store: store)
         }
         .menuBarExtraStyle(.window)
+
+        Window("Disk Tree", id: "disk") {
+            DiskWindow()
+                .environment(disk)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1380, height: 880)
 
         WindowGroup("Logs", id: "logs", for: LogTarget.self) { $target in
             if let target {

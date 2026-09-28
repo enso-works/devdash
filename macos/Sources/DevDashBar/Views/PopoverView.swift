@@ -95,6 +95,11 @@ private struct MainView: View {
                                 .padding(.horizontal, 4)
                                 .padding(.top, 8)
                         }
+                        if store.tab == .dev || store.tab == .docker {
+                            DiskBanner()
+                                .padding(.horizontal, 4)
+                                .padding(.top, 6)
+                        }
                         switch store.tab {
                         case .dev: DevTab()
                         case .docker: DockerTab()
@@ -416,13 +421,79 @@ private struct CleanupBanner: View {
     }
 }
 
+// MARK: - Disk banner
+
+/// Full-width row that opens the Disk tree window, with free space and reclaimable size.
+private struct DiskBanner: View {
+    @Environment(DiskStore.self) private var disk
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button {
+            openWindow(id: "disk")
+            NSApp.activate(ignoringOtherApps: true)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 26, height: 26)
+                    .background(Color.accentColor.opacity(0.15), in: .circle)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 12, weight: .semibold))
+                    Text(subtitle)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if disk.isScanning {
+                    ProgressView().controlSize(.mini)
+                }
+                Text("Open")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .card(radius: 10, padding: 8)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var title: String {
+        if disk.reclaimableTotal > 0 { return "Disk tree · \(ByteFormat.string(disk.reclaimableTotal)) worth a look" }
+        return "Disk tree"
+    }
+
+    private var subtitle: String {
+        var parts: [String] = []
+        if let volume = disk.volume { parts.append("\(ByteFormat.string(volume.free)) free") }
+        if disk.isScanning {
+            parts.append("scanning \(Format.count(Int(disk.progress.files))) files")
+        } else if disk.root == nil {
+            parts.append("see what takes up space")
+        } else if let date = disk.scanDate {
+            parts.append("scanned " + date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
 // MARK: - Footer
 
 private struct FooterBar: View {
     @Environment(Store.self) private var store
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(spacing: 2) {
+            IconButton(symbol: "internaldrive", help: "Disk tree") {
+                openWindow(id: "disk")
+                NSApp.activate(ignoringOtherApps: true)
+            }
             IconButton(symbol: "point.3.connected.trianglepath.dotted", help: "Dependency graph") { store.push(.graph) }
             if store.hasClaude {
                 IconButton(symbol: "square.grid.3x3.fill", help: "Claude activity heatmap") { store.push(.heatmap) }
