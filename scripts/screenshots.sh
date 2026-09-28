@@ -19,5 +19,6 @@ mkdir -p "$OUT/app"
 for name in "${APP_SHOTS[@]}"; do
     cp "$TMP/$name.png" "$OUT/app/$name.png"
 done
+DEVDASH_DEMO=1 "$(swift build --package-path "$REPO/macos" --show-bin-path)/DevDashBar" --render-disk "$OUT/app/disk-tree.png"
 rm -rf "$TMP"
 ls -lh "$OUT" "$OUT/app"

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Disk tree** in the menu bar app: a treemap of your home folder colored by category, with Size, Files and Age modes, zoom, hidden-file and apparent-size toggles, and adjustable depth.
+- "Worth a look" cleanup suggestions: idle build artifacts, agent worktrees, old experiments, package manager caches (using each tool's own cleanup command), Xcode and Android data, old downloads and large stale files. Files go to the Trash after confirmation.
+- Fast parallel scanner with a scan cache, background refresh and handling for folders that need Full Disk Access.
+- Disk card on the System tab and a low disk space notification.
+
 ## 0.2.0
 
 ### Added

@@ -151,9 +151,10 @@ enum Renderer {
     private static func render(to dir: URL) async {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = Store()
+        let disk = DiskStore()
         await waitForData(store)
 
-        let panel = host(PanelFrame { PopoverView().environment(store) }, size: PanelFrame<EmptyView>.size)
+        let panel = host(PanelFrame { PopoverView().environment(store).environment(disk) }, size: PanelFrame<EmptyView>.size)
         let screens: [(String, () -> Void)] = [
             ("dev", { store.routes = []; store.tab = .dev }),
             ("docker", { store.tab = .docker }),
@@ -181,7 +182,7 @@ enum Renderer {
         await waitForData(usageStore)
         claudeStore.tab = .claude
         usageStore.routes = [.usage]
-        let hero = host(HeroView(stores: [store, claudeStore, usageStore]), size: HeroView.size)
+        let hero = host(HeroView(stores: [store, claudeStore, usageStore], disk: disk), size: HeroView.size)
         try? await Task.sleep(for: .milliseconds(1500))
         capture(hero, to: dir.appendingPathComponent("hero.png"))
 
@@ -208,6 +209,7 @@ private struct PanelFrame<Content: View>: View {
 private struct HeroView: View {
     static var size: CGSize { CGSize(width: 1312, height: 658) }
     let stores: [Store]
+    let disk: DiskStore
 
     var body: some View {
         VStack(spacing: 0) {
@@ -229,7 +231,7 @@ private struct HeroView: View {
             .background(.black.opacity(0.55))
             HStack(alignment: .top, spacing: 0) {
                 ForEach(stores.indices, id: \.self) { index in
-                    PanelFrame { PopoverView().environment(stores[index]) }
+                    PanelFrame { PopoverView().environment(stores[index]).environment(disk) }
                 }
             }
             .padding(.horizontal, 8)
@@ -240,5 +242,79 @@ private struct HeroView: View {
             LinearGradient(colors: [Color(red: 0.16, green: 0.2, blue: 0.33), Color(red: 0.05, green: 0.07, blue: 0.12)], startPoint: .top, endPoint: .bottom)
         )
         .clipShape(.rect(cornerRadius: 12))
+    }
+}
+
+/// `DevDashBar --scan <path>`: runs the disk scanner and prints totals, timing and the largest children.
+enum ScanTest {
+    static func run(path: String) {
+        let start = Date()
+        let scanner = DiskScanner(rootPath: (path as NSString).expandingTildeInPath, skip: DiskAccess.protectedFolders(fullDiskAccess: DiskAccess.hasFullDiskAccess))
+        print("full disk access: \(DiskAccess.hasFullDiskAccess)")
+        if let threads = ProcessInfo.processInfo.environment["SCAN_THREADS"].flatMap(Int.init) {
+            scanner.run(threads: threads)
+        } else {
+            scanner.run()
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        let root = scanner.root
+        print(String(format: "scanned in %.2fs", elapsed))
+        print("allocated \(root.total.allocated) (\(ByteFormat.string(root.total.allocated)))  apparent \(ByteFormat.string(root.total.apparent))")
+        print("files \(root.total.files)  dirs \(root.total.dirs)  hidden \(ByteFormat.string(root.total.hiddenAllocated))")
+        var denied = 0
+        root.forEach { if $0.denied { denied += 1 } }
+        print("denied dirs \(denied)")
+        DiskClassifier.apply(to: root)
+        var nodes = 0
+        root.forEach { _ in nodes += 1 }
+        print("nodes kept \(nodes)")
+        for child in root.children.sorted(by: { $0.total.allocated > $1.total.allocated }).prefix(12) {
+            print("  \(ByteFormat.string(child.total.allocated).padding(toLength: 10, withPad: " ", startingAt: 0)) \(child.name) [\(child.category.label)]")
+        }
+        let started = Date()
+        let suggestions = DiskSuggestionEngine.suggestions(for: root)
+        print(String(format: "suggestions in %.2fs, total %@", Date().timeIntervalSince(started), ByteFormat.string(suggestions.reduce(0) { $0 + $1.size })))
+        for suggestion in suggestions {
+            print("  \(ByteFormat.string(suggestion.size).padding(toLength: 10, withPad: " ", startingAt: 0)) \(suggestion.title) | \(suggestion.detail) | \(suggestion.actionLabel)")
+        }
+    }
+}
+
+/// `DevDashBar --render-disk <out.png> [path]`: scans (or loads the cached scan) and renders the Disk window.
+enum DiskRenderer {
+    @MainActor
+    static func run(output: String, path: String?) {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        Task { @MainActor in
+            let disk = DiskStore()
+            if let path {
+                disk.scan(path: (path as NSString).expandingTildeInPath)
+            } else {
+                disk.prepare()
+            }
+            while disk.root == nil || disk.isScanning {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            let size = CGSize(width: 1380, height: 880)
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            let host = NSHostingView(rootView: DiskWindow().environment(disk).frame(width: size.width, height: size.height))
+            host.frame = NSRect(origin: .zero, size: size)
+            window.contentView = host
+            window.orderFrontRegardless()
+            if let first = disk.root?.children.max(by: { $0.total.allocated < $1.total.allocated }) {
+                disk.selection = first
+            }
+            try? await Task.sleep(for: .seconds(2))
+            host.layoutSubtreeIfNeeded()
+            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output))
+                print("rendered \(output)")
+            }
+            exit(0)
+        }
+        app.run()
     }
 }

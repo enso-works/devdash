@@ -10,6 +10,10 @@ enum Entry {
         let args = CommandLine.arguments
         if args.contains("--selftest") {
             SelfTest.run()
+        } else if let index = args.firstIndex(of: "--render-disk"), index + 1 < args.count {
+            DiskRenderer.run(output: args[index + 1], path: index + 2 < args.count ? args[index + 2] : nil)
+        } else if let index = args.firstIndex(of: "--scan"), index + 1 < args.count {
+            ScanTest.run(path: args[index + 1])
         } else if let index = args.firstIndex(of: "--render"), index + 1 < args.count {
             Renderer.run(outputDir: args[index + 1])
         } else {
@@ -21,16 +25,25 @@ enum Entry {
 struct DevDashBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = Store()
+    @State private var disk = DiskStore()
 
     var body: some Scene {
         MenuBarExtra {
             PopoverView()
                 .environment(store)
+                .environment(disk)
                 .onAppear { appDelegate.store = store }
         } label: {
             MenuBarLabel(store: store)
         }
         .menuBarExtraStyle(.window)
+
+        Window("Disk Tree", id: "disk") {
+            DiskWindow()
+                .environment(disk)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1380, height: 880)
 
         WindowGroup("Logs", id: "logs", for: LogTarget.self) { $target in
             if let target {

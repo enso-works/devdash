@@ -273,6 +273,7 @@ struct SystemTab: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .card(radius: 10, padding: 9)
                 }
+                DiskCard()
             }
             .padding(.horizontal, 4)
             .padding(.top, 10)
