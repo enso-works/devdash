@@ -15,12 +15,13 @@ def main() -> None:
     parser.add_argument("--version", action="version", version=f"devdash {__version__}")
     parser.add_argument("--update", action="store_true", help="Update devdash to the latest version")
     parser.add_argument("--serve", action="store_true", help="Stream JSON snapshots on stdout (used by the menu bar app)")
+    parser.add_argument("--demo", action="store_true", help="With --serve, stream synthetic demo data instead of real processes")
     args = parser.parse_args()
 
     if args.serve:
         from devdash.bridge import serve
 
-        serve(Config.load(args.config))
+        serve(Config.load(args.config), demo=args.demo)
         sys.exit(0)
 
     if args.update:
