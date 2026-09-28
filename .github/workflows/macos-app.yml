@@ -28,6 +28,7 @@ jobs:
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,3 +96,19 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
           gh release upload "$TAG" macos/dist/* --clobber
+
+      - name: Update Homebrew cask
+        if: startsWith(github.ref, 'refs/tags/v') && env.TAP_DEPLOY_KEY != '' && env.MACOS_CERT_P12 != ''
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="$(shasum -a 256 "macos/dist/DevDash-$VERSION-macos.dmg" | cut -d' ' -f1)"
+          KEY="$RUNNER_TEMP/tap_key"
+          echo "$TAP_DEPLOY_KEY" > "$KEY" && chmod 600 "$KEY"
+          export GIT_SSH_COMMAND="ssh -i $KEY -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@github.com:enso-works/homebrew-tap.git "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/devdash.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "devdash $VERSION" && git push
+          rm -f "$KEY"
