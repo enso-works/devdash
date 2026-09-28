@@ -480,6 +480,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.editor) private var editor = Editor.auto.rawValue
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var cliState = CommandLineTool.state
+    @State private var autoUpdate = Updater.shared.automaticallyChecks
 
     var body: some View {
         VStack(spacing: 0) {
@@ -502,6 +503,22 @@ struct SettingsView: View {
                     .controlSize(.small)
                     .font(.system(size: 12))
                     .card()
+
+                    if Updater.shared.isAvailable {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("DevDash \(appVersion)").font(.system(size: 11, weight: .semibold))
+                                Spacer()
+                                PillButton(title: "Check for updates", symbol: "arrow.down.circle") { Updater.shared.checkForUpdates() }
+                            }
+                            Toggle("Check for updates automatically", isOn: $autoUpdate)
+                                .onChange(of: autoUpdate) { _, enabled in Updater.shared.automaticallyChecks = enabled }
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .font(.system(size: 12))
+                        }
+                        .card()
+                    }
 
                     if cliState != .unavailable {
                         VStack(alignment: .leading, spacing: 6) {
@@ -552,6 +569,10 @@ struct SettingsView: View {
                 .padding(12)
             }
         }
+    }
+
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
     }
 
     private var cliDescription: String {
