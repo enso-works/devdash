@@ -8,3 +8,4 @@ build/
 .eggs/
 macos/.build/
 macos/.swiftpm/
+macos/build/
