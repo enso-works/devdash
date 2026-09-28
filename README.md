@@ -1,81 +1,194 @@
 # devdash
 
-A terminal dashboard for developers to monitor and manage Node.js processes and Docker containers from one place.
+[![macOS app](https://github.com/enso-works/devdash/actions/workflows/macos-app.yml/badge.svg)](https://github.com/enso-works/devdash/actions/workflows/macos-app.yml)
+[![Release](https://img.shields.io/github/v/release/enso-works/devdash)](https://github.com/enso-works/devdash/releases)
+![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
-Built with [Textual](https://textual.textualize.io/) and [psutil](https://github.com/giampaolo/psutil).
+See and manage your dev servers, Docker containers and Claude Code sessions from one place. It comes as a terminal dashboard and a native macOS menu bar app.
 
-![Dev Tab](screenshots/dev-tab.svg)
+![DevDash menu bar app](screenshots/app/hero.png)
 
 ## Why
 
-If you use Claude Code (or any AI coding agent) to work across multiple projects, you quickly end up with a mess of orphaned Node dev servers, runaway builds, and forgotten Docker containers eating your RAM in the background. You switch between projects, Claude spins up `next dev` or `vite` on port 3000, you move on, and now three instances are fighting over the same port while your fan screams.
+If you use Claude Code (or any AI coding agent) across several projects, background processes pile up fast. You end up with orphaned `next dev` servers, runaway builds and forgotten Docker containers, and three copies of the same app fighting over port 3000 while your fan spins up.
 
-devdash exists to give you a single pane of glass for all of it:
+devdash shows all of it on one screen:
 
-- **See every Node process at a glance** -- which ports they hold, how much memory they burn, which project they belong to (read straight from `package.json`).
-- **See every Docker container** -- status, ports, Compose project, and service name. No more `docker ps` in a separate terminal.
-- **Kill or stop anything in two keystrokes** -- `k` to kill, `y` to confirm. Batch-select with `space` and wipe out a whole stack at once.
-- **Stream container logs without leaving the dashboard** -- press `l` on a container row and tail its output in a modal. `Esc` to close.
-- **Get notified when things crash** -- toast notifications when a tracked process exits or a container disappears, so you catch it immediately instead of wondering why your API stopped responding.
-- **Filter, sort, and export** -- slash-search across all columns, click headers to sort, press `e` to dump a JSON snapshot for later analysis.
-
-It auto-refreshes every 3 seconds (configurable), preserves your cursor position, and degrades gracefully when Docker isn't running.
+- **Dev servers**: every Node process with the ports it holds, its memory and CPU, and the project it belongs to (read from `package.json`).
+- **Docker**: containers grouped by Compose stack, with status, health and ports.
+- **Cleanup**: flags idle, orphaned and zombie processes and long-running containers, and lets you remove them in one click.
+- **Claude Code**: running sessions, projects and recent sessions. Resume any of them in a new Terminal window.
+- **Claude usage**: your plan limits (5-hour session and weekly) and what your usage would cost at API prices.
+- **System**: CPU, memory, swap, disk, network and the heaviest processes.
 
 ## Install
 
-Requires Python 3.10+ and git.
+Requires Python 3.10+ and git. On macOS this also installs the menu bar app.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | bash
 ```
 
-Install a specific version:
+Options go on the `bash` side of the pipe:
 
 ```sh
-VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | VERSION=0.2.0 bash  # pin a version
+curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | NO_APP=1 bash       # CLI only
 ```
 
-This clones to `~/.devdash`, creates a virtualenv, and symlinks the binary to `~/.local/bin/devdash`.
+The installer:
+- clones devdash to `~/.devdash`, creates a virtualenv, and links `devdash` into `~/.local/bin`;
+- on macOS, puts `DevDash.app` in `~/Applications`.
 
-Running the installer again will update to the latest release (idempotent).
+Run it again to update. You can also run `devdash --update`, or use the prompt the app shows when it needs a newer CLI.
 
-## Usage
+## Menu bar app (macOS)
 
 ```sh
-devdash                          # launch with defaults
-devdash --config path/to/config  # use custom config file
+open ~/Applications/DevDash.app
+```
+
+The menu bar shows how many dev servers and containers are running, plus your current Claude session usage (for example `9 · 42%`). The icon switches to a flame when CPU or memory goes over your configured threshold. Click it to open the dashboard.
+
+| Dev servers | Docker | System |
+|---|---|---|
+| ![Dev](screenshots/app/dev.png) | ![Docker](screenshots/app/docker.png) | ![System](screenshots/app/system.png) |
+| **Claude** | **Claude usage** | **Cleanup** |
+| ![Claude](screenshots/app/claude.png) | ![Usage](screenshots/app/usage.png) | ![Cleanup](screenshots/app/cleanup.png) |
+| **Claude project** | **Process details** | **Dependency graph** |
+| ![Project](screenshots/app/project.png) | ![Details](screenshots/app/detail.png) | ![Graph](screenshots/app/graph.png) |
+
+What you can do:
+
+- **Dev**: click a port chip to open `localhost:<port>`. Hover a row to reveal it in Finder, open it in your editor, or kill it (click twice to confirm). Click a row for process details: command, children, network connections, open files and environment.
+- **Docker**: containers are grouped by Compose project, and "Stop all" stops a whole stack. Click a container to stream its logs in a separate window, with filtering, follow mode and copy.
+- **System**: memory, swap, disk and network usage, plus the top processes sorted by memory or CPU.
+- **Claude**:
+  - plan limits and API-equivalent cost;
+  - running sessions, projects and recent sessions;
+  - project pages with one-click launch: new session, continue, plan mode, resume picker, skip permissions, or a plain terminal in that folder.
+- **Cleanup**: shown as a banner when devdash finds idle, orphaned or zombie processes, or containers running longer than your stale threshold. Pick which ones to remove and clean them up together.
+- **Footer**: dependency graph, activity heatmap, JSON export, open the terminal UI, settings.
+- **Notifications**: a macOS notification when a dev server starts or exits, a container stops, or a watched port comes up.
+- **Settings**: launch at login, editor (VS Code or Cursor), whether the menu bar shows the count and usage percentage, notifications, and a custom `devdash` path.
+
+### Claude usage and API-equivalent cost
+
+The Claude tab has a usage card, and tapping it opens a detail page.
+
+- **Plan limits**: the same 5-hour session and weekly limits (including per-model weekly limits) that Claude Code's `/usage` shows, with reset times and your plan name.
+  - They're read with the Claude Code login already on your machine (the macOS keychain, or `~/.claude/.credentials.json` on other systems).
+  - devdash never refreshes or stores that token. If it has expired, run Claude Code once.
+- **API-equivalent cost**: what the tokens in your local Claude Code transcripts (`~/.claude/projects`) would cost at [Anthropic API list prices](https://platform.claude.com/docs/en/about-claude/pricing).
+  - It accounts for per-model rates, 5-minute and 1-hour cache writes, cache reads, fast mode, web search and US-only inference.
+  - It's shown for the current session, today, 7 days, 30 days and all time, broken down by model, project and token type.
+  - Your subscription is billed separately; this number shows what the same work would cost on the API.
+
+Everything is computed locally. The only network request is the plan-limits lookup to `api.anthropic.com`.
+
+### How it works
+
+The app is a small SwiftUI program that runs `devdash --serve` in the background. That process sends a JSON snapshot every few seconds and accepts commands (kill, stop, details, usage and so on) over stdin/stdout, so the terminal UI and the app share the same data code. If the CLI is missing or too old, the app shows the command to fix it and can run it in Terminal.
+
+## Terminal UI
+
+```sh
+devdash
+```
+
+![Dev tab](screenshots/dev-tab.svg)
+
+| System tab | Claude tab |
+|---|---|
+| ![System tab](screenshots/system-tab.svg) | ![Claude tab](screenshots/claude-tab.svg) |
+
+### Tabs
+
+- **[1] Dev**: Node processes (PID, project, ports, memory, CPU, uptime, directory, command) and Docker containers (ID, name, image, status, ports, Compose project and service).
+- **[2] System**: CPU, memory, swap and disk gauges, network rates, and the top processes by memory.
+- **[3] Claude**: shown when Claude Code is installed.
+  - Usage stats with a 14-day activity sparkline.
+  - Running instances, projects, and the 50 most recent sessions.
+  - Press `enter` on a project to open the launch menu: new session, skip permissions, plan mode, continue, resume, open in editor or Finder.
+
+### Keybindings
+
+| Key | Action |
+|-----|--------|
+| `1` / `2` / `3` | Dev / System / Claude tab |
+| `tab` | Next table in the current tab |
+| `/` | Filter across all columns |
+| `k` | Kill process / stop container (with confirmation) |
+| `space` | Select rows for batch kill/stop |
+| `l` | Stream Docker container logs |
+| `d` | Process details (environment, open files, connections, children) |
+| `enter` | Claude project launch menu, or details |
+| `s` | Browse and resume a Claude project's sessions |
+| `c` | Cleanup suggestions |
+| `g` | Dependency graph (which process talks to which port) |
+| `h` | Claude activity heatmap |
+| `e` | Export a JSON snapshot to `~/.local/share/devdash/` |
+| `r` | Refresh |
+| `ctrl+p` | Command palette |
+| `Esc` | Close filter or modal |
+| `q` | Quit |
+
+Click a column header to sort, and click it again to reverse the order. Filters and sort order stay in place across refreshes, and the terminal UI shows a toast when a tracked process exits or a container disappears.
+
+![Filter](screenshots/filter.svg)
+
+## Configuration
+
+Optional, at `~/.config/devdash/config.toml`. The terminal UI and the menu bar app both use it.
+
+```toml
+refresh_rate = 3.0                  # seconds between refreshes
+process_limit = 80                  # processes shown in the System tab
+watched_ports = [3000, 8080]        # notify when a process starts listening on these
+color_threshold_low = 50.0          # green -> yellow (%)
+color_threshold_high = 80.0         # yellow -> red (%), also the menu bar warning
+cleanup_idle_threshold_cpu = 1.0    # a Node process below this CPU % counts as idle
+cleanup_idle_threshold_minutes = 10 # ...after this many minutes
+cleanup_docker_stale_days = 7       # containers running longer than this are suggested for cleanup
+```
+
+## CLI
+
+```sh
+devdash                          # terminal UI
+devdash --config path/to/config  # custom config file
+devdash --update                 # update to the latest release
 devdash --version                # print version
-devdash --update                 # update to latest release
-devdash --serve                  # stream JSON snapshots (used by the menu bar app)
+devdash --serve                  # JSON-lines bridge used by the menu bar app
+devdash --serve --demo           # same protocol with synthetic data
 ```
 
-## macOS Menu Bar App
-
-A native SwiftUI menu bar app (`macos/`) with the same data as the TUI: dev servers, Docker stacks, system stats, Claude projects and sessions, cleanup suggestions, dependency graph and activity heatmap. It also streams container logs in a separate window and sends notifications when servers start or stop.
-
-The Claude tab shows your plan limits (5-hour session and weekly, with reset times), the same numbers as Claude Code's `/usage`. It also shows what your Claude Code usage would cost at API list prices: today, 7 days, 30 days and all time, broken down by model, project and token type. The cost is computed from the token counts in `~/.claude/projects` transcripts. Limits are read with the Claude Code login already on your machine. The session percentage can also be shown in the menu bar.
-
-Requires macOS 14+. The installer above also puts `DevDash.app` in `~/Applications` when the release includes it (set `NO_APP=1` to skip). Launch it with `open ~/Applications/DevDash.app`.
-
-The app runs `devdash --serve` as a child process and talks to it over JSON lines on stdin/stdout. If the CLI is missing or too old, the app shows the install or update command and can run it for you. You can also set a custom CLI path in the app's Settings.
-
-### Building from source
-
-Requires Xcode 16+ (Swift 6).
+## Development
 
 ```sh
-macos/scripts/build-app.sh            # build for this Mac and install to ~/Applications
-macos/scripts/build-app.sh --release  # universal build: zip, dmg and checksums in macos/dist/
-swift macos/scripts/make-icon.swift   # regenerate the app icon
+git clone https://github.com/enso-works/devdash && cd devdash
+python3 -m venv .venv && .venv/bin/pip install -e .
+./run.sh                                  # terminal UI from the checkout
+macos/scripts/build-app.sh                # build DevDash.app against this checkout, install to ~/Applications
 ```
 
-Local builds bake in the path to the repo's `.venv/bin/devdash` (override it with `DEVDASH_BIN`). Release builds find the CLI at runtime.
+The app needs Xcode 16+ (Swift 6) and macOS 14+. Useful tools:
 
-### Releases and signing
+| Command | What it does |
+|---------|--------------|
+| `python -m devdash.claude_usage` | Print the usage payload (limits and costs) as JSON |
+| `macos/.build/debug/DevDashBar --selftest` | Start the bridge and check every command decodes |
+| `DEVDASH_DEMO=1 macos/.build/debug/DevDashBar --render <dir>` | Render every app screen to PNG using demo data |
+| `scripts/screenshots.sh` | Regenerate all README screenshots from demo data |
+| `swift macos/scripts/make-icon.swift` | Regenerate the app icon |
 
-Pushing a `v*` tag runs `.github/workflows/macos-app.yml`, which builds the universal app and attaches the zip and dmg to the GitHub release. Without signing secrets the app is ad-hoc signed. `install.sh` installs it without the quarantine flag, so it opens normally. A copy downloaded through a browser has to be allowed once via System Settings > Privacy & Security > Open Anyway.
+### Releases
 
-To ship a Developer ID signed and notarized build, add these repository secrets:
+`macos/scripts/build-app.sh --release` builds a universal (Apple Silicon and Intel) app and writes a zip, a DMG and checksums to `macos/dist/`.
+
+Pushing a `v*` tag runs [the macOS workflow](.github/workflows/macos-app.yml). It self-tests the bridge, builds the release, and attaches the artifacts to the GitHub release, where `install.sh` picks them up.
+
+Without signing secrets, the app is ad-hoc signed. It opens normally when installed with `install.sh`. A copy downloaded in a browser has to be allowed once, in System Settings > Privacy & Security > Open Anyway. For a Developer ID signed and notarized build, add these repository secrets:
 
 | Secret | Value |
 |--------|-------|
@@ -84,138 +197,38 @@ To ship a Developer ID signed and notarized build, add these repository secrets:
 | `MACOS_SIGN_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
 | `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | notarization credentials (app-specific password) |
 
-Locally, the same thing works with `SIGN_IDENTITY=... NOTARY_PROFILE=<notarytool profile> macos/scripts/build-app.sh --release`.
+Locally: `SIGN_IDENTITY=... NOTARY_PROFILE=<notarytool profile> macos/scripts/build-app.sh --release`.
 
-Debug helpers: `DevDashBar --selftest` checks every bridge command, and `DevDashBar --render <dir>` writes a PNG of each screen.
+### Project structure
+
+```
+devdash/
+  app.py           # terminal UI: layout, bindings, data flow
+  screens.py       # modal screens (logs, details, cleanup, graph, heatmap, launch menu)
+  processes.py     # process, Docker, system and Claude Code data collection
+  claude_usage.py  # plan limits and API-equivalent cost from transcripts
+  bridge.py        # JSON-lines bridge for the menu bar app (--serve)
+  demo.py          # synthetic data for --demo and screenshots
+  cli.py           # command-line entry point
+  config.py        # config file loading
+  updater.py       # git-based self-update
+macos/
+  Sources/DevDashBar/   # SwiftUI menu bar app (bridge client, store, views)
+  Resources/            # app icon
+  scripts/              # build-app.sh, make-icon.swift
+scripts/                # screenshot generation
+.github/workflows/      # macOS build and release
+install.sh              # one-line installer
+```
 
 ## Uninstall
 
 ```sh
-rm -rf ~/.devdash ~/.local/bin/devdash
+rm -rf ~/.devdash ~/.local/bin/devdash ~/Applications/DevDash.app
 ```
 
-## Screenshots
-
-### Dev Tab
-
-Node processes and Docker containers side by side. Color-coded CPU/memory, project names from `package.json`, Compose project and service columns.
-
-![Dev Tab](screenshots/dev-tab.svg)
-
-### System Tab
-
-System resource gauges (CPU, memory, swap, disk, network) and a full process list sorted by memory.
-
-![System Tab](screenshots/system-tab.svg)
-
-### Filter
-
-Press `/` to filter across all columns. Matches persist across auto-refresh.
-
-![Filter](screenshots/filter.svg)
-
-## Keybindings
-
-| Key | Action |
-|-----|--------|
-| `q` | Quit |
-| `r` | Refresh data |
-| `k` | Kill process / stop container |
-| `l` | View Docker container logs (streaming) |
-| `d` | View process details (env, files, connections) |
-| `e` | Export snapshot to JSON |
-| `/` | Toggle search/filter bar |
-| `space` | Toggle row selection for batch operations |
-| `tab` | Switch between tables in current tab |
-| `1` / `2` | Switch to Dev / System tab |
-| `ctrl+p` | Open command palette |
-| `Esc` | Close filter bar or modal |
-
-Click any column header to sort. Click again to reverse.
-
-## Tabs
-
-### Dev Tab
-
-- **Node Processes** -- All running Node.js processes with PID, project name (from `package.json`), listening ports, memory, CPU, uptime, working directory, and command.
-- **Docker Containers** -- Running containers with ID, name, image, status, ports, uptime, and Docker Compose project/service columns.
-
-### System Tab
-
-- **Resource gauges** -- CPU, memory, swap, disk usage with color-coded bars. Network bandwidth (upload/download rates).
-- **All Processes** -- Top processes by memory (configurable limit) with CPU, memory, user, status.
-
-## Features
-
-**Color coding** -- CPU and memory cells are green (<50%), yellow (50-80%), or red (>80%). Thresholds are configurable.
-
-**Search/filter** -- Press `/` to open the filter bar. Case-insensitive substring match across all visible columns. Persists across auto-refresh cycles.
-
-**Sorting** -- Click any column header to sort ascending. Click again for descending. Sort persists across refreshes.
-
-**Project detection** -- Walks up from each Node process's working directory to find `package.json` and reads the `name` field. Results are cached.
-
-**Docker Compose awareness** -- Parses `com.docker.compose.project` and `com.docker.compose.service` labels. Containers are grouped by compose project.
-
-**Docker logs** -- Press `l` on a Docker container to stream its logs in a modal. Uses `docker logs --tail 100 --follow`. Press `Esc` to close.
-
-**Process details** -- Press `d` on any process to view environment variables, open files, network connections, threads, and child processes.
-
-**Multi-select** -- Press `space` to select/deselect rows. Selected rows are marked with `*`. Press `k` to batch kill/stop all selected items with a single confirmation.
-
-**Crash notifications** -- Toast notifications when a tracked Node process exits or a Docker container disappears. Also notifies when new processes appear on listening ports.
-
-**Export** -- Press `e` to write the current state to `~/.local/share/devdash/snapshot-{timestamp}.json`.
-
-**Command palette** -- Press `ctrl+p` to search and execute any action by name.
-
-## Configuration
-
-Optional config file at `~/.config/devdash/config.toml`:
-
-```toml
-refresh_rate = 3.0          # seconds between auto-refresh
-process_limit = 80          # max processes shown in System tab
-watched_ports = [3000, 8080] # notify when a process binds these ports
-color_threshold_low = 50.0  # green -> yellow boundary (%)
-color_threshold_high = 80.0 # yellow -> red boundary (%)
-```
-
-Override the config path:
-
-```sh
-devdash --config ~/my-config.toml
-```
-
-## Project Structure
-
-```
-devdash/
-  __init__.py   # version constant
-  app.py        # main TUI app, layout, bindings, data flow
-  bridge.py     # JSON-lines bridge for the menu bar app (--serve)
-  cli.py        # entry point with argparse
-  config.py     # config file loading (tomllib)
-  processes.py  # process discovery, docker queries, system stats
-  screens.py    # modal screens (confirm, log viewer, process details)
-  updater.py    # git-based self-update logic
-macos/
-  Package.swift              # SwiftPM package for DevDash.app
-  Resources/                 # app icon
-  Sources/DevDashBar/        # SwiftUI menu bar app (bridge client, store, views)
-  scripts/build-app.sh       # local install or universal release packaging
-  scripts/make-icon.swift    # renders the app icon
-install.sh      # one-line installer
-pyproject.toml  # package metadata and dependencies
-run.sh          # convenience launcher
-```
-
-## Dependencies
-
-- [textual](https://pypi.org/project/textual/) -- TUI framework
-- [psutil](https://pypi.org/project/psutil/) -- process and system monitoring
-- Docker CLI (optional, for container features)
+If you turned on launch at login, turn it off in the app's Settings first, or remove DevDash under System Settings > General > Login Items.
 
 ## License
 
-MIT
+[MIT](LICENSE)

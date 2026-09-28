@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "devdash"
 dynamic = ["version"]
-description = "Dev process dashboard - see and manage running Node processes and Docker containers"
+description = "Dashboard for dev servers, Docker containers and Claude Code, as a terminal UI and a macOS menu bar app"
 requires-python = ">=3.10"
 dependencies = [
     "textual>=1.0.0",
