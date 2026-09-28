@@ -5,11 +5,13 @@
 # installs to ~/Applications.
 #   ./scripts/build-app.sh
 #
-# Distribution build: universal binary, no baked CLI path, zip + dmg in macos/dist/.
+# Distribution build: universal binary with the CLI and a Python runtime embedded, Sparkle
+# auto-updates, zip + dmg in macos/dist/.
 #   ./scripts/build-app.sh --release
 #
 # Environment:
 #   DEVDASH_BIN=/path/to/devdash   CLI path baked into a local build
+#   EMBED_PYTHON=1                 embed the CLI in a local build too, like a release
 #   SIGN_IDENTITY="Developer ID Application: ..."   sign with a real identity (default: ad-hoc)
 #   NOTARY_PROFILE=name            notarize + staple using a `notarytool store-credentials` profile
 #   NO_INSTALL=1                   skip copying a local build into ~/Applications
@@ -19,6 +21,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
 APP_NAME="DevDash"
 BUNDLE_ID="works.enso.devdash.bar"
+FEED_URL="https://github.com/enso-works/devdash/releases/latest/download/appcast.xml"
+SPARKLE_PUBLIC_KEY="3wHTQ4oY/25gnkw3ZNSxC/3zln7Jpqz75iMWqnJUDHA="
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$REPO/devdash/__init__.py")"
 BUILD_NUMBER="$(git -C "$REPO" rev-list --count HEAD 2>/dev/null || echo 1)"
 OUT="$ROOT/build/$APP_NAME.app"
@@ -26,6 +30,8 @@ DIST="$ROOT/dist"
 
 RELEASE=0
 [[ "${1:-}" == "--release" ]] && RELEASE=1
+EMBED=$RELEASE
+[[ "${EMBED_PYTHON:-}" == "1" ]] && EMBED=1
 
 info() { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
 
@@ -51,9 +57,20 @@ BIN="$(swift build -c release --package-path "$ROOT" ${ARCH_FLAGS[@]+"${ARCH_FLA
 # --- Assemble bundle ------------------------------------------------------------------------
 info "Assembling $OUT"
 rm -rf "$OUT"
-mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
+mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources" "$OUT/Contents/Frameworks"
 cp "$BIN" "$OUT/Contents/MacOS/$APP_NAME"
 cp "$ROOT/Resources/AppIcon.icns" "$OUT/Contents/Resources/AppIcon.icns"
+ditto "$(dirname "$BIN")/Sparkle.framework" "$OUT/Contents/Frameworks/Sparkle.framework"
+rm -rf "$OUT/Contents/Frameworks/Sparkle.framework/Versions/B/"{Headers,PrivateHeaders,Modules} \
+    "$OUT/Contents/Frameworks/Sparkle.framework/"{Headers,PrivateHeaders,Modules}
+
+# Only release builds update themselves; a local build would be replaced by the published one.
+SPARKLE_KEYS=""
+if [[ $RELEASE -eq 1 ]]; then
+    SPARKLE_KEYS="<key>SUFeedURL</key><string>$FEED_URL</string>
+    <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
+    <key>SUEnableAutomaticChecks</key><true/>"
+fi
 
 cat > "$OUT/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -75,19 +92,35 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
     <key>NSHumanReadableCopyright</key><string>devdash contributors</string>
     <key>NSAppleEventsUsageDescription</key><string>DevDash opens Terminal to start Claude sessions and the devdash TUI.</string>
     <key>DevDashCommand</key><string>$BAKED_BIN</string>
+    $SPARKLE_KEYS
 </dict>
 </plist>
 PLIST
 
-# --- Sign -----------------------------------------------------------------------------------
+# --- Embed the CLI --------------------------------------------------------------------------
+[[ $EMBED -eq 1 ]] && "$ROOT/scripts/embed-python.sh" "$OUT"
+
+# --- Sign, innermost code first -------------------------------------------------------------
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
     info "Signing with $SIGN_IDENTITY (hardened runtime)"
-    codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$OUT"
+    SIGN=(codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY")
 else
     info "Signing ad-hoc"
-    codesign --force --sign - "$OUT"
+    SIGN=(codesign --force --sign -)
 fi
-codesign --verify --strict "$OUT"
+if [[ -d "$OUT/Contents/Resources/python" ]]; then
+    while IFS= read -r -d '' file; do
+        [[ "$(file -b --mime-type "$file")" == "application/x-mach-binary" ]] && "${SIGN[@]}" "$file"
+    done < <(find "$OUT/Contents/Resources/python" -type f -print0)
+fi
+SPARKLE="$OUT/Contents/Frameworks/Sparkle.framework/Versions/B"
+"${SIGN[@]}" "$SPARKLE/XPCServices/Installer.xpc"
+"${SIGN[@]}" --preserve-metadata=entitlements "$SPARKLE/XPCServices/Downloader.xpc"
+"${SIGN[@]}" "$SPARKLE/Autoupdate"
+"${SIGN[@]}" "$SPARKLE/Updater.app"
+"${SIGN[@]}" "$OUT/Contents/Frameworks/Sparkle.framework"
+"${SIGN[@]}" "$OUT"
+codesign --verify --deep --strict "$OUT"
 
 # --- Local install --------------------------------------------------------------------------
 if [[ $RELEASE -eq 0 ]]; then
@@ -137,6 +170,11 @@ fi
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
     notarize "$DMG"
     xcrun stapler staple "$DMG"
+    info "Checking Gatekeeper"
+    xcrun stapler validate "$OUT"
+    xcrun stapler validate "$DMG"
+    spctl --assess --type execute --verbose "$OUT"
+    spctl --assess --type open --context context:primary-signature --verbose "$DMG"
 fi
 
 (cd "$DIST" && shasum -a 256 "$(basename "$ZIP")" "$(basename "$DMG")" > "$APP_NAME-$VERSION-checksums.txt")
