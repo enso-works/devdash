@@ -39,7 +39,6 @@ from devdash.processes import (
 )
 
 CLAUDE_REFRESH_EVERY = 5  # ticks
-SYSTEM_PROCESS_LIMIT = 40
 USAGE_REFRESH_SECONDS = 30.0
 
 
@@ -125,7 +124,7 @@ class Bridge:
     def _snapshot(self) -> dict:
         node_procs = get_node_processes()
         docker = get_docker_containers()
-        all_procs = get_all_processes(limit=SYSTEM_PROCESS_LIMIT)
+        all_procs = get_all_processes(limit=self._config.process_limit)
         stats = get_system_stats()
         self._update_idle_tracker(node_procs)
         cleanup = get_cleanup_suggestions(
