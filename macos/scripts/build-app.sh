@@ -173,7 +173,7 @@ info "Creating $DMG"
 STAGE="$(mktemp -d)"
 cp -R "$OUT" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -quiet -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format ULFO "$DMG"
+hdiutil create -quiet -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format ULMO "$DMG"
 rm -rf "$STAGE"
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
