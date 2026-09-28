@@ -18,6 +18,7 @@ from pathlib import Path
 import psutil
 
 from devdash import __version__
+from devdash.claude_usage import UsageTracker
 from devdash.config import Config
 from devdash.processes import (
     get_activity_heatmap_data,
@@ -38,6 +39,7 @@ from devdash.processes import (
 )
 
 CLAUDE_REFRESH_EVERY = 5  # ticks
+USAGE_REFRESH_SECONDS = 30.0
 SYSTEM_PROCESS_LIMIT = 40
 
 
@@ -66,6 +68,10 @@ class Bridge:
         self._docker = []
         self._all_procs = []
         self._stats = None
+        self._usage = UsageTracker() if self._has_claude else None
+        self._usage_payload: dict | None = None
+        self._usage_version = 0
+        self._usage_sent = 0
 
     # -- output --------------------------------------------------------------
 
@@ -91,6 +97,8 @@ class Bridge:
         psutil.cpu_percent(interval=0)
         get_node_processes()
         threading.Thread(target=self._read_commands, daemon=True).start()
+        if self._usage is not None:
+            threading.Thread(target=self._usage_loop, daemon=True).start()
         time.sleep(0.5)
         while not self._stop.is_set():
             try:
@@ -149,6 +157,10 @@ class Bridge:
 
         if self._has_claude and self._tick % CLAUDE_REFRESH_EVERY == 0:
             snapshot["claude"] = self._claude_payload()
+        with self._state_lock:
+            if self._usage_version != self._usage_sent:
+                snapshot["usage"] = self._usage_payload
+                self._usage_sent = self._usage_version
         self._tick += 1
         return snapshot
 
@@ -164,6 +176,25 @@ class Bridge:
             "sessions": [_asdict(s) for s in get_all_recent_sessions()],
             "stats": _claude_stats_payload(get_claude_stats()),
         }
+
+    # -- usage ---------------------------------------------------------------
+
+    def _usage_loop(self) -> None:
+        # Transcript parsing and the limits request are slow, so they run off the snapshot loop.
+        while not self._stop.is_set():
+            self._refresh_usage()
+            self._stop.wait(USAGE_REFRESH_SECONDS)
+
+    def _refresh_usage(self, force_limits: bool = False) -> dict | None:
+        try:
+            payload = self._usage.payload(force_limits=force_limits)
+        except Exception as e:
+            self.emit({"type": "error", "message": f"usage failed: {e}"})
+            return None
+        with self._state_lock:
+            self._usage_payload = payload
+            self._usage_version += 1
+        return payload
 
     # -- commands ------------------------------------------------------------
 
@@ -203,6 +234,11 @@ class Bridge:
         if not self._has_claude:
             return None
         return self._claude_payload()
+
+    def _cmd_usage(self, cmd: dict):
+        if self._usage is None:
+            return None
+        return self._refresh_usage(force_limits=bool(cmd.get("force")))
 
     def _cmd_kill(self, cmd: dict):
         pid = int(cmd["pid"])
