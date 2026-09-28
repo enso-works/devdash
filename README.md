@@ -53,6 +53,8 @@ devdash --serve                  # stream JSON snapshots (used by the menu bar a
 
 A native SwiftUI menu bar app (`macos/`) with the same data as the TUI: dev servers, Docker stacks, system stats, Claude projects and sessions, cleanup suggestions, dependency graph and activity heatmap. It also streams container logs in a separate window and sends notifications when servers start or stop.
 
+The Claude tab shows your plan limits (5-hour session and weekly, with reset times), the same numbers as Claude Code's `/usage`. It also shows what your Claude Code usage would cost at API list prices: today, 7 days, 30 days and all time, broken down by model, project and token type. The cost is computed from the token counts in `~/.claude/projects` transcripts. Limits are read with the Claude Code login already on your machine. The session percentage can also be shown in the menu bar.
+
 Requires macOS 14+. The installer above also puts `DevDash.app` in `~/Applications` when the release includes it (set `NO_APP=1` to skip). Launch it with `open ~/Applications/DevDash.app`.
 
 The app runs `devdash --serve` as a child process and talks to it over JSON lines on stdin/stdout. If the CLI is missing or too old, the app shows the install or update command and can run it for you. You can also set a custom CLI path in the app's Settings.
