@@ -46,7 +46,47 @@ devdash                          # launch with defaults
 devdash --config path/to/config  # use custom config file
 devdash --version                # print version
 devdash --update                 # update to latest release
+devdash --serve                  # stream JSON snapshots (used by the menu bar app)
 ```
+
+## macOS Menu Bar App
+
+A native SwiftUI menu bar app (`macos/`) with the same data as the TUI: dev servers, Docker stacks, system stats, Claude projects and sessions, cleanup suggestions, dependency graph and activity heatmap. It also streams container logs in a separate window and sends notifications when servers start or stop.
+
+The Claude tab shows your plan limits (5-hour session and weekly, with reset times), the same numbers as Claude Code's `/usage`. It also shows what your Claude Code usage would cost at API list prices: today, 7 days, 30 days and all time, broken down by model, project and token type. The cost is computed from the token counts in `~/.claude/projects` transcripts. Limits are read with the Claude Code login already on your machine. The session percentage can also be shown in the menu bar.
+
+Requires macOS 14+. The installer above also puts `DevDash.app` in `~/Applications` when the release includes it (set `NO_APP=1` to skip). Launch it with `open ~/Applications/DevDash.app`.
+
+The app runs `devdash --serve` as a child process and talks to it over JSON lines on stdin/stdout. If the CLI is missing or too old, the app shows the install or update command and can run it for you. You can also set a custom CLI path in the app's Settings.
+
+### Building from source
+
+Requires Xcode 16+ (Swift 6).
+
+```sh
+macos/scripts/build-app.sh            # build for this Mac and install to ~/Applications
+macos/scripts/build-app.sh --release  # universal build: zip, dmg and checksums in macos/dist/
+swift macos/scripts/make-icon.swift   # regenerate the app icon
+```
+
+Local builds bake in the path to the repo's `.venv/bin/devdash` (override it with `DEVDASH_BIN`). Release builds find the CLI at runtime.
+
+### Releases and signing
+
+Pushing a `v*` tag runs `.github/workflows/macos-app.yml`, which builds the universal app and attaches the zip and dmg to the GitHub release. Without signing secrets the app is ad-hoc signed. `install.sh` installs it without the quarantine flag, so it opens normally. A copy downloaded through a browser has to be allowed once via System Settings > Privacy & Security > Open Anyway.
+
+To ship a Developer ID signed and notarized build, add these repository secrets:
+
+| Secret | Value |
+|--------|-------|
+| `MACOS_CERT_P12` | base64 of the exported Developer ID Application certificate (.p12) |
+| `MACOS_CERT_PASSWORD` | password of the .p12 |
+| `MACOS_SIGN_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | notarization credentials (app-specific password) |
+
+Locally, the same thing works with `SIGN_IDENTITY=... NOTARY_PROFILE=<notarytool profile> macos/scripts/build-app.sh --release`.
+
+Debug helpers: `DevDashBar --selftest` checks every bridge command, and `DevDashBar --render <dir>` writes a PNG of each screen.
 
 ## Uninstall
 
@@ -153,11 +193,18 @@ devdash --config ~/my-config.toml
 devdash/
   __init__.py   # version constant
   app.py        # main TUI app, layout, bindings, data flow
+  bridge.py     # JSON-lines bridge for the menu bar app (--serve)
   cli.py        # entry point with argparse
   config.py     # config file loading (tomllib)
   processes.py  # process discovery, docker queries, system stats
   screens.py    # modal screens (confirm, log viewer, process details)
   updater.py    # git-based self-update logic
+macos/
+  Package.swift              # SwiftPM package for DevDash.app
+  Resources/                 # app icon
+  Sources/DevDashBar/        # SwiftUI menu bar app (bridge client, store, views)
+  scripts/build-app.sh       # local install or universal release packaging
+  scripts/make-icon.swift    # renders the app icon
 install.sh      # one-line installer
 pyproject.toml  # package metadata and dependencies
 run.sh          # convenience launcher

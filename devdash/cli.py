@@ -14,7 +14,14 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=None, help="Path to config file")
     parser.add_argument("--version", action="version", version=f"devdash {__version__}")
     parser.add_argument("--update", action="store_true", help="Update devdash to the latest version")
+    parser.add_argument("--serve", action="store_true", help="Stream JSON snapshots on stdout (used by the menu bar app)")
     args = parser.parse_args()
+
+    if args.serve:
+        from devdash.bridge import serve
+
+        serve(Config.load(args.config))
+        sys.exit(0)
 
     if args.update:
         from devdash.updater import perform_update

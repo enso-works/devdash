@@ -119,6 +119,35 @@ case "${SHELL:-}" in
         ;;
 esac
 
+# --- macOS menu bar app (skip with NO_APP=1) ---
+install_mac_app() {
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    [ "${NO_APP:-}" = "1" ] && return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    case "$TARGET_REF" in v*) ;; *) return 0 ;; esac
+
+    local version="${TARGET_REF#v}"
+    local url="https://github.com/enso-works/devdash/releases/download/$TARGET_REF/DevDash-$version-macos.zip"
+    local tmp
+    tmp=$(mktemp -d)
+    if ! curl -fsSL "$url" -o "$tmp/DevDash.zip" 2>/dev/null; then
+        info "No menu bar app published for $TARGET_REF, skipping."
+        rm -rf "$tmp"
+        return 0
+    fi
+    info "Installing DevDash.app to ~/Applications..."
+    ditto -x -k "$tmp/DevDash.zip" "$tmp"
+    mkdir -p "$HOME/Applications"
+    pkill -x DevDash 2>/dev/null || true
+    rm -rf "$HOME/Applications/DevDash.app"
+    mv "$tmp/DevDash.app" "$HOME/Applications/DevDash.app"
+    xattr -dr com.apple.quarantine "$HOME/Applications/DevDash.app" 2>/dev/null || true
+    rm -rf "$tmp"
+    APP_INSTALLED=1
+}
+APP_INSTALLED=0
+install_mac_app
+
 # --- Done ---
 VERSION=$("$INSTALL_DIR/.venv/bin/devdash" --version 2>&1 || echo "devdash")
 info ""
@@ -126,3 +155,8 @@ info "Installed $VERSION"
 info ""
 info "Open a new shell (or run 'source ~/.zshrc') then:"
 info "  devdash"
+if [ "$APP_INSTALLED" = "1" ]; then
+    info ""
+    info "Menu bar app installed. Launch it with:"
+    info "  open ~/Applications/DevDash.app"
+fi
