@@ -52,19 +52,26 @@ private struct MainView: View {
             HeaderView()
             switch store.connection {
             case .missingBinary:
-                Spacer()
-                EmptyState(
+                SetupView(
                     symbol: "terminal",
-                    title: "devdash CLI not found",
-                    message: "Install devdash or set the path to its executable in Settings."
+                    title: "Install the devdash CLI",
+                    message: "The menu bar app reads its data from the devdash command line tool.",
+                    command: SetupView.installCommand
                 )
-                PillButton(title: "Open Settings", symbol: "gearshape", prominent: true) { store.push(.settings) }
-                Spacer()
             case .failed(let reason) where store.system == nil:
-                Spacer()
-                EmptyState(symbol: "bolt.horizontal.circle", title: "Bridge stopped", message: reason)
-                PillButton(title: "Retry", symbol: "arrow.clockwise", prominent: true) { store.start() }
-                Spacer()
+                if reason.contains("--serve") {
+                    SetupView(
+                        symbol: "arrow.down.circle",
+                        title: "Update the devdash CLI",
+                        message: "This version of devdash is too old for the menu bar app.",
+                        command: "devdash --update"
+                    )
+                } else {
+                    Spacer()
+                    EmptyState(symbol: "bolt.horizontal.circle", title: "Bridge stopped", message: reason)
+                    PillButton(title: "Retry", symbol: "arrow.clockwise", prominent: true) { store.start() }
+                    Spacer()
+                }
             case .starting where store.system == nil:
                 Spacer()
                 ProgressView().controlSize(.small)
@@ -102,6 +109,61 @@ private struct MainView: View {
             Divider().opacity(0.5)
             FooterBar()
         }
+    }
+}
+
+// MARK: - Setup
+
+/// Shown when the CLI is missing or outdated: explains the fix and can run it in Terminal.
+private struct SetupView: View {
+    static let installCommand = "curl -fsSL https://raw.githubusercontent.com/enso-works/devdash/main/install.sh | bash"
+
+    @Environment(Store.self) private var store
+    let symbol: String
+    let title: String
+    let message: String
+    let command: String
+    @State private var copied = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            Image(systemName: symbol)
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(Color.accentColor)
+            VStack(spacing: 4) {
+                Text(title).font(.system(size: 14, weight: .semibold))
+                Text(message)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            HStack(spacing: 6) {
+                Text(command)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                IconButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy command") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(command, forType: .string)
+                    copied = true
+                }
+            }
+            .card(radius: 8, padding: 8)
+            HStack(spacing: 8) {
+                PillButton(title: "Run in Terminal", symbol: "terminal", prominent: true) {
+                    Launcher.runInTerminal(command, in: NSHomeDirectory())
+                }
+                PillButton(title: "Check again", symbol: "arrow.clockwise") { store.start() }
+            }
+            Button("Set a custom path in Settings") { store.push(.settings) }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.accentColor)
+            Spacer()
+        }
+        .padding(.horizontal, 24)
     }
 }
 
