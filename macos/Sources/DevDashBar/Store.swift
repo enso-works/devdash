@@ -69,6 +69,8 @@ final class Store {
     private(set) var usage: ClaudeUsage?
     private(set) var lastUpdate: Date?
     private(set) var connection: ConnectionState = .starting
+    /// The devdash CLI the bridge runs, also used to open the terminal UI.
+    private(set) var executable: URL?
     private(set) var cpuHistory: [Double] = []
 
     // UI state
@@ -109,7 +111,8 @@ final class Store {
     func start() {
         restartTask?.cancel()
         let custom = UserDefaults.standard.string(forKey: SettingsKey.devdashPath) ?? ""
-        guard let executable = BridgeLocator.resolve(customPath: custom) else {
+        executable = BridgeLocator.resolve(customPath: custom)
+        guard let executable else {
             connection = .missingBinary
             return
         }

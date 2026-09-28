@@ -39,12 +39,20 @@ enum ShellEnvironment {
 }
 
 enum BridgeLocator {
-    /// Resolution order: user setting, path baked in at bundle time, well-known install locations.
+    /// The CLI embedded in release builds, next to its own Python runtime.
+    static var bundled: URL? {
+        guard let url = Bundle.main.resourceURL?.appendingPathComponent("bin/devdash"),
+              FileManager.default.isExecutableFile(atPath: url.path) else { return nil }
+        return url
+    }
+
+    /// Resolution order: user setting, bundled CLI, path baked in at bundle time, well-known install locations.
     static func resolve(customPath: String) -> URL? {
         let fm = FileManager.default
         var candidates: [String] = []
         let trimmed = customPath.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { candidates.append((trimmed as NSString).expandingTildeInPath) }
+        if let bundled { candidates.append(bundled.path) }
         if let baked = Bundle.main.object(forInfoDictionaryKey: "DevDashCommand") as? String, !baked.isEmpty {
             candidates.append(baked)
         }
@@ -53,6 +61,39 @@ enum BridgeLocator {
         candidates.append("\(NSHomeDirectory())/.devdash/.venv/bin/devdash")
         if let found = ShellEnvironment.which("devdash") { candidates.append(found.path) }
         return candidates.first { fm.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+    }
+}
+
+/// Links the bundled CLI into ~/.local/bin so `devdash` also works in a terminal.
+enum CommandLineTool {
+    static let link = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".local/bin/devdash")
+
+    enum State: Equatable {
+        /// No bundled CLI, or the app runs from a read-only location (disk image, App Translocation).
+        case unavailable
+        case linked
+        /// Nothing there, or a symlink to another install that can be replaced.
+        case notLinked(current: String?)
+        /// A regular file we won't overwrite.
+        case blocked
+    }
+
+    static var state: State {
+        guard let bundled = BridgeLocator.bundled,
+              !bundled.path.hasPrefix("/Volumes/"), !bundled.path.contains("/AppTranslocation/") else { return .unavailable }
+        let fm = FileManager.default
+        if let target = try? fm.destinationOfSymbolicLink(atPath: link.path) {
+            return target == bundled.path ? .linked : .notLinked(current: target)
+        }
+        return fm.fileExists(atPath: link.path) ? .blocked : .notLinked(current: nil)
+    }
+
+    static func install() throws {
+        guard let bundled = BridgeLocator.bundled else { return }
+        let fm = FileManager.default
+        try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if (try? fm.destinationOfSymbolicLink(atPath: link.path)) != nil { try fm.removeItem(at: link) }
+        try fm.createSymbolicLink(at: link, withDestinationURL: bundled)
     }
 }
 

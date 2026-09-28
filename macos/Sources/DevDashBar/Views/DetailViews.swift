@@ -479,6 +479,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.notifications) private var notifications = true
     @AppStorage(SettingsKey.editor) private var editor = Editor.auto.rawValue
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var cliState = CommandLineTool.state
 
     var body: some View {
         VStack(spacing: 0) {
@@ -501,6 +502,27 @@ struct SettingsView: View {
                     .controlSize(.small)
                     .font(.system(size: 12))
                     .card()
+
+                    if cliState != .unavailable {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Command line tool").font(.system(size: 11, weight: .semibold))
+                                Spacer()
+                                if cliState == .linked {
+                                    Label("Installed", systemImage: "checkmark.circle.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.green)
+                                } else if cliState != .blocked {
+                                    PillButton(title: "Install", symbol: "terminal", prominent: true) { installCommandLineTool() }
+                                }
+                            }
+                            Text(cliDescription)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .card()
+                    }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("devdash executable").font(.system(size: 11, weight: .semibold))
@@ -530,6 +552,25 @@ struct SettingsView: View {
                 .padding(12)
             }
         }
+    }
+
+    private var cliDescription: String {
+        switch cliState {
+        case .linked: "devdash in ~/.local/bin runs the copy bundled with this app."
+        case .notLinked(let current?): "Links ~/.local/bin/devdash to the copy bundled with this app, replacing the link to \(current)."
+        case .blocked: "~/.local/bin/devdash is a file, not a link. Remove it to use the bundled copy in a terminal."
+        default: "Links ~/.local/bin/devdash to the copy bundled with this app, so you can run the terminal UI."
+        }
+    }
+
+    private func installCommandLineTool() {
+        do {
+            try CommandLineTool.install()
+            store.showToast("Installed devdash in ~/.local/bin")
+        } catch {
+            store.showToast("Install failed: \(error.localizedDescription)", isError: true)
+        }
+        cliState = CommandLineTool.state
     }
 
     private var resolvedDescription: String {
