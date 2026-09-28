@@ -104,7 +104,8 @@ enum SelfTest {
     }
 }
 
-/// `DevDashBar --render <dir>`: renders each popover screen with live data to PNGs (debug aid).
+/// `DevDashBar --render <dir>`: renders each popover screen to PNGs (debug aid and README screenshots).
+/// Run with DEVDASH_DEMO=1 to use synthetic data. Also writes hero.png, three panels under a menu bar strip.
 enum Renderer {
     @MainActor
     static func run(outputDir: String) {
@@ -118,20 +119,41 @@ enum Renderer {
     }
 
     @MainActor
-    private static func render(to dir: URL) async {
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let store = Store()
+    private static func waitForData(_ store: Store) async {
         for _ in 0..<80 where store.system == nil || (store.hasClaude && (store.claude == nil || store.usage == nil)) {
             try? await Task.sleep(for: .milliseconds(250))
         }
+    }
 
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 580), styleMask: [.borderless], backing: .buffered, defer: false)
+    @MainActor
+    private static func host<V: View>(_ view: V, size: CGSize) -> NSHostingView<some View> {
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: ProcessInfo.processInfo.environment["RENDER_LIGHT"] != nil ? .aqua : .darkAqua)
-        let host = NSHostingView(rootView: PopoverView().environment(store).background(Color(nsColor: .windowBackgroundColor)))
-        host.frame = window.contentRect(forFrameRect: window.frame)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
         window.contentView = host
         window.orderFrontRegardless()
+        return host
+    }
 
+    @MainActor
+    private static func capture(_ view: NSView, to url: URL) {
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+        print("rendered \(url.lastPathComponent)")
+    }
+
+    @MainActor
+    private static func render(to dir: URL) async {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = Store()
+        await waitForData(store)
+
+        let panel = host(PanelFrame { PopoverView().environment(store) }, size: PanelFrame<EmptyView>.size)
         let screens: [(String, () -> Void)] = [
             ("dev", { store.routes = []; store.tab = .dev }),
             ("docker", { store.tab = .docker }),
@@ -148,12 +170,75 @@ enum Renderer {
         for (name, apply) in screens {
             apply()
             try? await Task.sleep(for: .milliseconds(1500))
-            host.layoutSubtreeIfNeeded()
-            guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { continue }
-            host.cacheDisplay(in: host.bounds, to: rep)
-            try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(name).png"))
-            print("rendered \(name)")
+            capture(panel, to: dir.appendingPathComponent("\(name).png"))
         }
-        store.shutdown()
+        store.routes = []
+        store.tab = .dev
+
+        let claudeStore = Store()
+        let usageStore = Store()
+        await waitForData(claudeStore)
+        await waitForData(usageStore)
+        claudeStore.tab = .claude
+        usageStore.routes = [.usage]
+        let hero = host(HeroView(stores: [store, claudeStore, usageStore]), size: HeroView.size)
+        try? await Task.sleep(for: .milliseconds(1500))
+        capture(hero, to: dir.appendingPathComponent("hero.png"))
+
+        [store, claudeStore, usageStore].forEach { $0.shutdown() }
+    }
+}
+
+/// A popover-shaped panel with rounded corners on a transparent background.
+private struct PanelFrame<Content: View>: View {
+    static var size: CGSize { CGSize(width: 432, height: 612) }
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .frame(width: 400, height: 580)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .clipShape(.rect(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12)))
+            .padding(16)
+    }
+}
+
+/// Menu bar strip with the status item, and three popovers hanging below it.
+private struct HeroView: View {
+    static var size: CGSize { CGSize(width: 1312, height: 658) }
+    let stores: [Store]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 18) {
+                Spacer()
+                ForEach(["wifi", "battery.75percent", "magnifyingglass"], id: \.self) {
+                    Image(systemName: $0).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.85))
+                }
+                MenuBarLabel(store: stores[0])
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(.white.opacity(0.2), in: .rect(cornerRadius: 5))
+                Text("Mon 9:41").font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 30)
+            .background(.black.opacity(0.55))
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(stores.indices, id: \.self) { index in
+                    PanelFrame { PopoverView().environment(stores[index]) }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+            Spacer(minLength: 0)
+        }
+        .background(
+            LinearGradient(colors: [Color(red: 0.16, green: 0.2, blue: 0.33), Color(red: 0.05, green: 0.07, blue: 0.12)], startPoint: .top, endPoint: .bottom)
+        )
+        .clipShape(.rect(cornerRadius: 12))
     }
 }

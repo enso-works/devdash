@@ -40,7 +40,6 @@ from devdash.processes import (
 
 CLAUDE_REFRESH_EVERY = 5  # ticks
 USAGE_REFRESH_SECONDS = 30.0
-SYSTEM_PROCESS_LIMIT = 40
 
 
 def _asdict(obj):
@@ -125,7 +124,7 @@ class Bridge:
     def _snapshot(self) -> dict:
         node_procs = get_node_processes()
         docker = get_docker_containers()
-        all_procs = get_all_processes(limit=SYSTEM_PROCESS_LIMIT)
+        all_procs = get_all_processes(limit=self._config.process_limit)
         stats = get_system_stats()
         self._update_idle_tracker(node_procs)
         cleanup = get_cleanup_suggestions(
@@ -370,5 +369,75 @@ def _process_detail(pid: int) -> dict:
     }
 
 
-def serve(config: Config) -> None:
-    Bridge(config).run()
+class DemoBridge(Bridge):
+    """Serves devdash.demo fixtures through the real protocol (screenshots, UI work)."""
+
+    def __init__(self, config: Config) -> None:
+        super().__init__(config)
+        self._has_claude = True
+        self._usage = None
+
+    def _snapshot(self) -> dict:
+        from devdash import demo
+
+        snapshot = {
+            "type": "snapshot",
+            "timestamp": time.time(),
+            "system": demo.system(),
+            "node": demo.node(),
+            "docker": demo.docker(),
+            "processes": demo.processes(),
+            "cleanup": demo.cleanup(),
+        }
+        if self._tick % CLAUDE_REFRESH_EVERY == 0:
+            snapshot["claude"] = demo.claude()
+            snapshot["usage"] = demo.usage()
+        self._tick += 1
+        return snapshot
+
+    def _cmd_refresh_claude(self, cmd: dict):
+        from devdash import demo
+        return demo.claude()
+
+    def _cmd_usage(self, cmd: dict):
+        from devdash import demo
+        return demo.usage()
+
+    def _cmd_kill(self, cmd: dict):
+        return {"pid": int(cmd["pid"])}
+
+    def _cmd_stop_container(self, cmd: dict):
+        return {"container_id": str(cmd["container_id"])}
+
+    def _cmd_cleanup(self, cmd: dict):
+        items = cmd.get("items") or []
+        kills = sum(1 for i in items if i.get("action_type") == "kill")
+        return {"killed": kills, "stopped": len(items) - kills, "failed": 0}
+
+    def _cmd_process_detail(self, cmd: dict):
+        from devdash import demo
+        return demo.process_detail(int(cmd["pid"]))
+
+    def _cmd_graph(self, cmd: dict):
+        from devdash import demo
+        return demo.graph()
+
+    def _cmd_heatmap(self, cmd: dict):
+        from devdash import demo
+        return demo.heatmap()
+
+    def _cmd_project_detail(self, cmd: dict):
+        from devdash import demo
+        return demo.project_detail(str(cmd["path"]))
+
+    def _cmd_project_sessions(self, cmd: dict):
+        from devdash import demo
+        return demo.project_detail(str(cmd["path"]))["recent_sessions"]
+
+
+def serve(config: Config, demo: bool = False) -> None:
+    # DEVDASH_DEMO lets a parent process (the menu bar app) opt in without changing arguments.
+    if demo or os.environ.get("DEVDASH_DEMO") == "1":
+        DemoBridge(config).run()
+    else:
+        Bridge(config).run()
