@@ -108,9 +108,11 @@ else
     info "Signing ad-hoc"
     SIGN=(codesign --force --sign -)
 fi
+# `file` prints one extra line per architecture for universal binaries.
+is_macho() { [[ "$(file -b --mime-type "$1" | head -1)" == "application/x-mach-binary" ]]; }
 if [[ -d "$OUT/Contents/Resources/python" ]]; then
     while IFS= read -r -d '' file; do
-        [[ "$(file -b --mime-type "$file")" == "application/x-mach-binary" ]] && "${SIGN[@]}" "$file"
+        if is_macho "$file"; then "${SIGN[@]}" "$file"; fi
     done < <(find "$OUT/Contents/Resources/python" -type f -print0)
 fi
 SPARKLE="$OUT/Contents/Frameworks/Sparkle.framework/Versions/B"
@@ -121,6 +123,15 @@ SPARKLE="$OUT/Contents/Frameworks/Sparkle.framework/Versions/B"
 "${SIGN[@]}" "$OUT/Contents/Frameworks/Sparkle.framework"
 "${SIGN[@]}" "$OUT"
 codesign --verify --deep --strict "$OUT"
+# --deep does not look at code stored as resources, so check every binary for the team ID.
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+    TEAM_ID="$(codesign -dv "$OUT" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+    while IFS= read -r -d '' file; do
+        is_macho "$file" || continue
+        details="$(codesign -dv "$file" 2>&1 || true)"
+        [[ "$details" == *"TeamIdentifier=$TEAM_ID"* ]] || { echo "not signed by $TEAM_ID: $file" >&2; exit 1; }
+    done < <(find "$OUT" -type f -print0)
+fi
 
 # --- Local install --------------------------------------------------------------------------
 if [[ $RELEASE -eq 0 ]]; then
