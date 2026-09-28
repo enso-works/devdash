@@ -10,6 +10,10 @@ enum Entry {
         let args = CommandLine.arguments
         if args.contains("--selftest") {
             SelfTest.run()
+        } else if let index = args.firstIndex(of: "--render-disk"), index + 1 < args.count {
+            DiskRenderer.run(output: args[index + 1], path: index + 2 < args.count ? args[index + 2] : nil)
+        } else if let index = args.firstIndex(of: "--scan"), index + 1 < args.count {
+            ScanTest.run(path: args[index + 1])
         } else if let index = args.firstIndex(of: "--render"), index + 1 < args.count {
             Renderer.run(outputDir: args[index + 1])
         } else {
