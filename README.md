@@ -46,7 +46,23 @@ devdash                          # launch with defaults
 devdash --config path/to/config  # use custom config file
 devdash --version                # print version
 devdash --update                 # update to latest release
+devdash --serve                  # stream JSON snapshots (used by the menu bar app)
 ```
+
+## macOS Menu Bar App
+
+A native SwiftUI menu bar app (`macos/`) with the same data as the TUI: dev servers, Docker stacks, system stats, Claude projects and sessions, cleanup suggestions, dependency graph and activity heatmap. It also streams container logs in a separate window and sends notifications when servers start or stop.
+
+Requires Xcode command line tools (Swift 6) and macOS 14+.
+
+```sh
+macos/scripts/build-app.sh      # builds DevDash.app and installs it to ~/Applications
+open ~/Applications/DevDash.app
+```
+
+The app runs `devdash --serve` as a child process and talks to it over JSON lines on stdin/stdout. The build script bakes in the path to the repo's `.venv/bin/devdash` (or `devdash` on your PATH). Set `DEVDASH_BIN` to override it at build time, or change it later in the app's Settings.
+
+Debug helpers: `DevDashBar --selftest` checks every bridge command, and `DevDashBar --render <dir>` writes a PNG of each screen.
 
 ## Uninstall
 
@@ -153,11 +169,16 @@ devdash --config ~/my-config.toml
 devdash/
   __init__.py   # version constant
   app.py        # main TUI app, layout, bindings, data flow
+  bridge.py     # JSON-lines bridge for the menu bar app (--serve)
   cli.py        # entry point with argparse
   config.py     # config file loading (tomllib)
   processes.py  # process discovery, docker queries, system stats
   screens.py    # modal screens (confirm, log viewer, process details)
   updater.py    # git-based self-update logic
+macos/
+  Package.swift              # SwiftPM package for DevDash.app
+  Sources/DevDashBar/        # SwiftUI menu bar app (bridge client, store, views)
+  scripts/build-app.sh       # builds, signs and installs DevDash.app
 install.sh      # one-line installer
 pyproject.toml  # package metadata and dependencies
 run.sh          # convenience launcher
