@@ -17,6 +17,7 @@ devdash shows all of it on one screen:
 - **Dev servers**: every Node process with the ports it holds, its memory and CPU, and the project it belongs to (read from `package.json`).
 - **Docker**: containers grouped by Compose stack, with status, health and ports.
 - **Cleanup**: flags idle, orphaned and zombie processes and long-running containers, and lets you remove them in one click.
+- **Disk tree**: a treemap of your home folder that shows what takes up space and suggests what you can safely reclaim.
 - **Claude Code**: running sessions, projects and recent sessions. Resume any of them in a new Terminal window.
 - **Claude usage**: your plan limits (5-hour session and weekly) and what your usage would cost at API prices.
 - **System**: CPU, memory, swap, disk, network and the heaviest processes.
@@ -71,6 +72,36 @@ What you can do:
 - **Footer**: dependency graph, activity heatmap, JSON export, open the terminal UI, settings.
 - **Notifications**: a macOS notification when a dev server starts or exits, a container stops, or a watched port comes up.
 - **Settings**: launch at login, editor (VS Code or Cursor), whether the menu bar shows the count and usage percentage, notifications, and a custom `devdash` path.
+
+### Disk tree
+
+![Disk tree](screenshots/app/disk-tree.png)
+
+Open it from the Disk tree row on the Dev and Docker tabs, the Disk card on the System tab, or the drive icon in the popover footer.
+
+- **Treemap**:
+  - Every folder is a box sized by disk usage, nested up to the chosen depth.
+  - Boxes are colored by what they hold: Code, Agent scratch (Codex/Claude worktrees, experiments), Toolchains, Synced, Git, Media, Documents, Cache.
+  - Space you can reclaim is hatched.
+- **Navigation**: click to select, double-click to zoom in, use the breadcrumb to go back up, right-click to reveal, copy the path, open a terminal or move to Trash.
+- **Modes and options**:
+  - Size, Files (sized by file count) and Age (colored from recently written to long untouched).
+  - Toggles for hidden files and for apparent size versus size on disk.
+  - Depth can be set from 1 to 8.
+- **Worth a look**: cleanup suggestions ranked by size, each with a reason. Expand one to see exactly which folders it covers.
+  - `node_modules`, Rust `target`, `.next`/`.turbo`, SwiftPM `.build`, Gradle, Pods and virtualenvs, in projects untouched for 14 days.
+  - Agent worktrees idle for a week, and experiments (`tries`, `scratch`, `playground`) idle for 30 days.
+  - Package manager and tool caches. These use the tool's own command where there is one: `brew cleanup`, `npm cache clean`, `pnpm store prune`, `uv cache clean`, `go clean -modcache`, `pod cache clean`, `docker system prune`, `xcrun simctl delete unavailable`.
+  - Xcode DerivedData and DeviceSupport, Android emulators, large app caches, downloads older than 90 days, files over 1 GiB untouched for 6 months, and the Trash.
+- **Safety**:
+  - Nothing is deleted directly. Files go to the Trash, and every action first shows exactly what it will remove.
+  - For cleanup commands the size shown is labeled "up to", since the tool decides what it removes.
+  - After trashing agent worktrees, `git worktree prune` runs in their repository.
+- **Speed and permissions**:
+  - The scanner reads each directory's metadata in bulk and runs 8 threads. A home folder with about 9M files takes about a minute the first time.
+  - Results are cached, so the window opens instantly, and they're refreshed in the background when older than six hours.
+  - Without Full Disk Access, app containers (including Docker Desktop's disk image), Mail and cloud folders are skipped rather than triggering permission prompts. A banner links to the setting.
+- **Low disk warning**: a notification when free space drops below 15 GiB or 5%.
 
 ### Claude usage and API-equivalent cost
 
@@ -178,6 +209,7 @@ The app needs Xcode 16+ (Swift 6) and macOS 14+. Useful tools:
 |---------|--------------|
 | `python -m devdash.claude_usage` | Print the usage payload (limits and costs) as JSON |
 | `macos/.build/debug/DevDashBar --selftest` | Start the bridge and check every command decodes |
+| `macos/.build/release/DevDashBar --scan <path>` | Run the disk scanner and print totals, timing and cleanup suggestions |
 | `DEVDASH_DEMO=1 macos/.build/debug/DevDashBar --render <dir>` | Render every app screen to PNG using demo data |
 | `scripts/screenshots.sh` | Regenerate all README screenshots from demo data |
 | `swift macos/scripts/make-icon.swift` | Regenerate the app icon |
@@ -214,6 +246,7 @@ devdash/
   updater.py       # git-based self-update
 macos/
   Sources/DevDashBar/   # SwiftUI menu bar app (bridge client, store, views)
+    Disk/               # disk scanner, cache, cleanup rules, treemap and Disk window
   Resources/            # app icon
   scripts/              # build-app.sh, make-icon.swift
 scripts/                # screenshot generation
