@@ -84,6 +84,11 @@ enum SelfTest {
                 return "\(s.count) sessions"
             }
         }
+        await step("usage") {
+            let u = try await bridge.request("usage", as: ClaudeUsage?.self)
+            let today = u?.periods.today.cost ?? 0
+            return "plan=\(u?.plan ?? "-") limits=\(u?.limits.count ?? 0) today=$\(String(format: "%.2f", today)) models=\(u?.models.count ?? 0) error=\(u?.error ?? "none")"
+        }
         await step("unknown command errors") {
             do {
                 _ = try await bridge.send("nope")
@@ -116,7 +121,7 @@ enum Renderer {
     private static func render(to dir: URL) async {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = Store()
-        for _ in 0..<60 where store.system == nil || (store.hasClaude && store.claude == nil) {
+        for _ in 0..<80 where store.system == nil || (store.hasClaude && (store.claude == nil || store.usage == nil)) {
             try? await Task.sleep(for: .milliseconds(250))
         }
 
@@ -134,6 +139,7 @@ enum Renderer {
             ("claude", { store.tab = .claude }),
             ("cleanup", { store.tab = .dev; store.routes = [.cleanup] }),
             ("heatmap", { store.routes = [.heatmap] }),
+            ("usage", { store.routes = [.usage] }),
             ("graph", { store.routes = [.graph] }),
             ("project", { store.routes = store.claude?.projects.first.map { [.claudeProject(path: $0.path)] } ?? [] }),
             ("detail", { store.routes = store.node.first.map { [.processDetail(pid: $0.pid, name: $0.displayName)] } ?? [] }),

@@ -57,14 +57,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct MenuBarLabel: View {
     let store: Store
     @AppStorage(SettingsKey.showCount) private var showCount = true
+    @AppStorage(SettingsKey.showUsage) private var showUsage = true
 
     var body: some View {
         HStack(spacing: 3) {
             Image(systemName: symbol)
-            if showCount, store.activeCount > 0 {
-                Text("\(store.activeCount)").monospacedDigit()
+            if let text, !text.isEmpty {
+                Text(text).monospacedDigit()
             }
         }
+    }
+
+    private var text: String? {
+        var parts: [String] = []
+        if showCount, store.activeCount > 0 { parts.append("\(store.activeCount)") }
+        if showUsage, let session = store.usage?.sessionLimit {
+            parts.append("\(Int(session.percent.rounded()))%")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var symbol: String {

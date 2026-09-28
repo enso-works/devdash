@@ -22,7 +22,7 @@ enum Format {
         if n >= 1_000_000_000 { return String(format: "%.1fB", Double(n) / 1e9) }
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1e6) }
         if n >= 10_000 { return String(format: "%.1fK", Double(n) / 1e3) }
-        return n.formatted()
+        return n.formatted(.number.locale(Locale(identifier: "en_US")))
     }
 }
 

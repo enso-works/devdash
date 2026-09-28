@@ -14,7 +14,11 @@ struct ClaudeTab: View {
 
     var body: some View {
         if let claude = store.claude {
-            if let stats = claude.stats {
+            if let usage = store.usage {
+                UsageCard(usage: usage)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 10)
+            } else if let stats = claude.stats {
                 StatsCard(stats: stats)
                     .padding(.horizontal, 4)
                     .padding(.top, 10)

@@ -37,6 +37,7 @@ enum Route: Hashable {
     case cleanup
     case graph
     case heatmap
+    case usage
     case settings
 }
 
@@ -49,6 +50,7 @@ struct Toast: Identifiable, Equatable {
 enum SettingsKey {
     static let devdashPath = "devdashPath"
     static let showCount = "showCountInMenuBar"
+    static let showUsage = "showUsageInMenuBar"
     static let notifications = "notificationsEnabled"
     static let editor = "editor"
 }
@@ -64,6 +66,7 @@ final class Store {
     private(set) var processes: [GeneralProcess] = []
     private(set) var cleanup: [CleanupSuggestion] = []
     private(set) var claude: ClaudePayload?
+    private(set) var usage: ClaudeUsage?
     private(set) var lastUpdate: Date?
     private(set) var connection: ConnectionState = .starting
     private(set) var cpuHistory: [Double] = []
@@ -157,6 +160,9 @@ final class Store {
         docker = snapshot.docker
         processes = snapshot.processes
         cleanup = snapshot.cleanup
+        if let usage = snapshot.usage {
+            self.usage = usage
+        }
         if let claude = snapshot.claude {
             self.claude = claude
             lastClaudeUpdate = .now
@@ -184,6 +190,18 @@ final class Store {
             guard let payload = try? await bridge.request("refresh_claude", as: ClaudePayload.self) else { return }
             claude = payload
             lastClaudeUpdate = .now
+        }
+    }
+
+    /// Re-reads transcripts now; `force` also re-fetches plan limits instead of using the cached ones.
+    func refreshUsage(force: Bool = false) {
+        guard hasClaude, !pending.contains("usage") else { return }
+        pending.insert("usage")
+        Task {
+            defer { pending.remove("usage") }
+            if let payload = try? await bridge.request("usage", ["force": force], as: ClaudeUsage?.self) {
+                usage = payload
+            }
         }
     }
 

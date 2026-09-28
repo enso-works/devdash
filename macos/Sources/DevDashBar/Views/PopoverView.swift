@@ -39,6 +39,7 @@ private struct RouteView: View {
         case .cleanup: CleanupView()
         case .graph: GraphView()
         case .heatmap: HeatmapView()
+        case .usage: UsageView()
         case .settings: SettingsView()
         }
     }

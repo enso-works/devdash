@@ -197,6 +197,7 @@ struct Snapshot: Decodable, Sendable {
     let processes: [GeneralProcess]
     let cleanup: [CleanupSuggestion]
     let claude: ClaudePayload?
+    let usage: ClaudeUsage?
 }
 
 struct ProcessDetail: Decodable, Sendable {
@@ -272,3 +273,80 @@ struct ProjectDetail: Decodable, Sendable {
 
 struct ExportResult: Decodable, Sendable { let path: String }
 struct CleanupResult: Decodable, Sendable { let killed: Int; let stopped: Int; let failed: Int }
+
+// MARK: - Claude usage (devdash/claude_usage.py)
+
+struct UsageTotals: Decodable, Sendable, Hashable {
+    let cost: Double
+    let input: Int
+    let output: Int
+    let cacheWrite: Int
+    let cacheRead: Int
+    let requests: Int
+
+    var tokens: Int { input + output + cacheWrite + cacheRead }
+}
+
+struct UsagePeriods: Decodable, Sendable {
+    let today: UsageTotals
+    let week: UsageTotals
+    let month: UsageTotals
+    let all: UsageTotals
+}
+
+struct ModelCost: Decodable, Sendable, Hashable, Identifiable {
+    let model: String
+    let cost: Double
+    let input: Int
+    let output: Int
+    let cacheWrite: Int
+    let cacheRead: Int
+    let requests: Int
+
+    var id: String { model }
+
+    /// "claude-opus-5-5" -> "Opus 5.5", "claude-haiku-4-5-20251001" -> "Haiku 4.5".
+    var displayName: String {
+        var parts = model.split(separator: "-").map(String.init)
+        if parts.first == "claude" { parts.removeFirst() }
+        if let last = parts.last, last.count == 8, Int(last) != nil { parts.removeLast() }
+        guard let family = parts.first(where: { Int($0) == nil }) else { return model }
+        let version = parts.filter { Int($0) != nil }.joined(separator: ".")
+        return version.isEmpty ? family.capitalized : "\(family.capitalized) \(version)"
+    }
+}
+
+struct PlanLimit: Decodable, Sendable, Hashable, Identifiable {
+    let label: String
+    let group: String
+    let percent: Double
+    let severity: String
+    let resetsAt: Double?
+    let isActive: Bool
+
+    var id: String { label }
+    var resetDate: Date? { resetsAt.map { Date(timeIntervalSince1970: $0) } }
+}
+
+struct ExtraUsage: Decodable, Sendable {
+    let used: Double?
+    let limit: Double?
+    let currency: String
+    let utilization: Double?
+}
+
+struct ClaudeUsage: Decodable, Sendable {
+    let plan: String?
+    let limits: [PlanLimit]
+    let extraUsage: ExtraUsage?
+    let error: String?
+    let limitsUpdated: Double
+    let periods: UsagePeriods
+    let session: UsageTotals?
+    let models: [ModelCost]
+    let projects: [LabeledValue]
+    let daily: [LabeledValue]
+    let unpricedModels: [String]
+
+    var sessionLimit: PlanLimit? { limits.first { $0.group == "session" } }
+}
