@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -89,6 +90,10 @@ def check_for_update() -> str | None:
 
 def perform_update() -> None:
     """Fetch the latest release tag and checkout."""
+    if os.environ.get("DEVDASH_BUNDLED"):
+        print("This devdash is bundled with DevDash.app. Update the app instead: Settings > Check for updates.")
+        return
+
     repo = _get_install_dir()
     if repo is None:
         print("Not installed from git clone -- update not available.")
