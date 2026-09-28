@@ -9,3 +9,4 @@ build/
 macos/.build/
 macos/.swiftpm/
 macos/build/
+macos/dist/
