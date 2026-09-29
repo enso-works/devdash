@@ -80,6 +80,18 @@ struct Server: Decodable, Sendable, Identifiable, Hashable {
     var isBackground: Bool { kind == "background" }
     var isService: Bool { kind == "service" }
     var displayName: String { label.isEmpty ? name : label }
+    /// The command with paths shortened: relative to the working directory, `~` for home, and the
+    /// interpreter by name only (`node node_modules/.bin/vite` instead of two absolute paths).
+    var shortCommand: String {
+        var text = command
+        if cwdFull.count > 1 { text = text.replacingOccurrences(of: cwdFull + "/", with: "") }
+        text = text.replacingOccurrences(of: NSHomeDirectory() + "/", with: "~/")
+        let parts = text.split(separator: " ", maxSplits: 1)
+        guard let first = parts.first, first.contains("/") else { return text }
+        let name = (String(first) as NSString).lastPathComponent
+        return parts.count > 1 ? "\(name) \(parts[1])" : name
+    }
+
     /// Name used in notifications, where there is no group header for context.
     var reportName: String { projectName.isEmpty ? displayName : "\(projectName) \(displayName)" }
 }

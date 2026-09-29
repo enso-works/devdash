@@ -202,6 +202,7 @@ private struct GroupHeader: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.head)
+                    .layoutPriority(-1)
             }
             Spacer(minLength: 4)
             if group.kind == .background {
@@ -223,7 +224,7 @@ private struct GroupHeader: View {
                 .padding(.vertical, 2)
                 .background(Color.red, in: .capsule)
             } else {
-                CountBadge(count: group.count)
+                CountBadge(count: group.count).fixedSize()
             }
             if group.root != nil || group.canStop {
                 GroupMenu(group: group, armStop: arm)
@@ -388,7 +389,7 @@ struct ServerRow: View {
     }
 
     private var subtitle: String {
-        guard showProject else { return server.command }
+        guard showProject else { return server.shortCommand }
         let place = server.projectName.isEmpty ? server.cwd : server.projectName
         return "\(place)  ·  up \(server.uptime)"
     }
