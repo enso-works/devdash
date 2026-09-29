@@ -49,6 +49,18 @@ enum SelfTest {
         print("ok   snapshot node=\(snapshot.node.count) docker=\(snapshot.docker.count) procs=\(snapshot.processes.count) cleanup=\(snapshot.cleanup.count) claude=\(claudeSeen)")
 
         var failures = 0
+        if let servers = snapshot.servers {
+            let apps = servers.filter { $0.kind == "app" }
+            let projects = Set(servers.map(\.projectRoot).filter { !$0.isEmpty })
+            print("ok   servers=\(servers.count) apps=\(apps.count) runtimes=\(Set(servers.map(\.runtime)).sorted()) projects=\(projects.count)")
+            if snapshot.docker.contains(where: { $0.projectRoot == nil }) {
+                failures += 1
+                print("FAIL containers without project_root")
+            }
+        } else {
+            failures += 1
+            print("FAIL snapshot has no servers")
+        }
         func step(_ name: String, _ body: () async throws -> String) async {
             do {
                 print("ok   \(name): \(try await body())")
@@ -147,6 +159,14 @@ enum Renderer {
         print("rendered \(url.lastPathComponent)")
     }
 
+    /// Collapses (or re-expands) every project group, for the overview screenshot.
+    @MainActor
+    private static func toggleProjects(_ store: Store) {
+        RunningGroup.byProject(servers: store.servers, containers: store.docker, claude: store.claudeInstances)
+            .filter { $0.kind == .project }
+            .forEach(store.toggleCollapsed)
+    }
+
     @MainActor
     private static func render(to dir: URL) async {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -156,16 +176,18 @@ enum Renderer {
 
         let panel = host(PanelFrame { PopoverView().environment(store).environment(disk) }, size: PanelFrame<EmptyView>.size)
         let screens: [(String, () -> Void)] = [
-            ("dev", { store.routes = []; store.tab = .dev }),
-            ("docker", { store.tab = .docker }),
-            ("system", { store.tab = .system }),
+            ("running", { store.routes = []; store.grouping = .project; store.tab = .running }),
+            ("running-collapsed", { toggleProjects(store) }),
+            ("running-type", { toggleProjects(store); store.grouping = .type }),
+            ("system", { store.grouping = .project; store.tab = .system }),
             ("claude", { store.tab = .claude }),
-            ("cleanup", { store.tab = .dev; store.routes = [.cleanup] }),
+            ("cleanup", { store.tab = .running; store.routes = [.cleanup] }),
+            ("whatsnew", { store.routes = [.whatsNew] }),
             ("heatmap", { store.routes = [.heatmap] }),
             ("usage", { store.routes = [.usage] }),
             ("graph", { store.routes = [.graph] }),
             ("project", { store.routes = store.claude?.projects.first.map { [.claudeProject(path: $0.path)] } ?? [] }),
-            ("detail", { store.routes = store.node.first.map { [.processDetail(pid: $0.pid, name: $0.displayName)] } ?? [] }),
+            ("detail", { store.routes = store.servers.first.map { [.processDetail(pid: $0.pid, name: $0.displayName)] } ?? [] }),
             ("settings", { store.routes = [.settings] }),
         ]
         for (name, apply) in screens {
@@ -174,7 +196,7 @@ enum Renderer {
             capture(panel, to: dir.appendingPathComponent("\(name).png"))
         }
         store.routes = []
-        store.tab = .dev
+        store.tab = .running
 
         let claudeStore = Store()
         let usageStore = Store()

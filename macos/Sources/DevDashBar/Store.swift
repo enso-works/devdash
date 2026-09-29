@@ -10,25 +10,31 @@ enum ConnectionState: Equatable {
 }
 
 enum Tab: String, CaseIterable, Identifiable {
-    case dev, docker, system, claude
+    case running, claude, system
 
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .dev: "Dev"
-        case .docker: "Docker"
-        case .system: "System"
+        case .running: "Running"
         case .claude: "Claude"
+        case .system: "System"
         }
     }
     var symbol: String {
         switch self {
-        case .dev: "chevron.left.forwardslash.chevron.right"
-        case .docker: "shippingbox"
-        case .system: "gauge.with.dots.needle.33percent"
+        case .running: "play.circle"
         case .claude: "sparkle"
+        case .system: "gauge.with.dots.needle.33percent"
         }
     }
+}
+
+/// How the Running tab groups its rows.
+enum Grouping: String, CaseIterable, Identifiable {
+    case project, type
+
+    var id: String { rawValue }
+    var title: String { self == .project ? "Project" : "Type" }
 }
 
 enum Route: Hashable {
@@ -39,6 +45,7 @@ enum Route: Hashable {
     case heatmap
     case usage
     case settings
+    case whatsNew
 }
 
 struct Toast: Identifiable, Equatable {
@@ -53,6 +60,9 @@ enum SettingsKey {
     static let showUsage = "showUsageInMenuBar"
     static let notifications = "notificationsEnabled"
     static let editor = "editor"
+    static let tab = "selectedTab"
+    static let grouping = "runningGrouping"
+    static let toggledGroups = "toggledRunningGroups"
 }
 
 @MainActor
@@ -62,6 +72,8 @@ final class Store {
     private(set) var hello: Hello?
     private(set) var system: SystemStats?
     private(set) var node: [NodeProcess] = []
+    private(set) var servers: [Server] = []
+    private(set) var projects: [String: ProjectInfo] = [:]
     private(set) var docker: [DockerContainer] = []
     private(set) var processes: [GeneralProcess] = []
     private(set) var cleanup: [CleanupSuggestion] = []
@@ -74,9 +86,24 @@ final class Store {
     private(set) var cpuHistory: [Double] = []
 
     // UI state
-    var tab: Tab = .dev {
-        didSet { if tab == .claude { refreshClaude() } }
+    var tab: Tab = Tab(rawValue: UserDefaults.standard.string(forKey: SettingsKey.tab) ?? "") ?? .running {
+        didSet {
+            UserDefaults.standard.set(tab.rawValue, forKey: SettingsKey.tab)
+            if tab == .claude { refreshClaude() }
+        }
     }
+    var grouping: Grouping = Grouping(rawValue: UserDefaults.standard.string(forKey: SettingsKey.grouping) ?? "") ?? .project {
+        didSet { UserDefaults.standard.set(grouping.rawValue, forKey: SettingsKey.grouping) }
+    }
+    /// Groups whose collapsed state differs from their default.
+    private(set) var toggledGroups = Set(UserDefaults.standard.stringArray(forKey: SettingsKey.toggledGroups) ?? []) {
+        didSet { UserDefaults.standard.set(Array(toggledGroups), forKey: SettingsKey.toggledGroups) }
+    }
+    /// Dismissed "Needs you" items: id to the signature they had when dismissed.
+    private(set) var dismissed: [String: String] = [:]
+    private(set) var whatsNewSeen = UserDefaults.standard.string(forKey: WhatsNew.seenKey)
+    /// Bumped to move keyboard focus into the filter field.
+    private(set) var searchFocusRequest = 0
     var routes: [Route] = []
     var query = ""
     private(set) var toast: Toast?
@@ -91,9 +118,9 @@ final class Store {
 
     var config: BridgeConfig { hello?.config ?? BridgeConfig() }
     var hasClaude: Bool { hello?.hasClaude ?? false }
-    var servers: [NodeProcess] { node.filter { !$0.ports.isEmpty } }
-    var backgroundNode: [NodeProcess] { node.filter { $0.ports.isEmpty } }
-    var activeCount: Int { servers.count + docker.count }
+    var appServers: [Server] { servers.filter { $0.kind == "app" } }
+    var activeCount: Int { appServers.count + docker.count }
+    var claudeInstances: [ClaudeInstance] { claude?.instances ?? [] }
     var isUnderPressure: Bool {
         guard let system else { return false }
         return system.cpuPercent >= config.colorThresholdHigh || system.memoryPercent >= config.colorThresholdHigh
@@ -160,6 +187,8 @@ final class Store {
         connection = .connected
         system = snapshot.system
         node = snapshot.node
+        servers = snapshot.servers ?? snapshot.node.map(Server.init(node:))
+        projects = Dictionary((snapshot.projects ?? []).map { ($0.root, $0) }, uniquingKeysWith: { a, _ in a })
         docker = snapshot.docker
         processes = snapshot.processes
         cleanup = snapshot.cleanup
@@ -174,7 +203,7 @@ final class Store {
         cpuHistory.append(snapshot.system.cpuPercent)
         if cpuHistory.count > 40 { cpuHistory.removeFirst(cpuHistory.count - 40) }
 
-        let events = tracker.diff(node: snapshot.node, docker: snapshot.docker, watchedPorts: config.watchedPorts)
+        let events = tracker.diff(servers: servers, docker: snapshot.docker, watchedPorts: config.watchedPorts)
         if UserDefaults.standard.object(forKey: SettingsKey.notifications) as? Bool ?? true {
             Notifier.post(events)
         }
@@ -258,6 +287,31 @@ final class Store {
         }
     }
 
+    /// Kills every server and stops every container of a Running group.
+    func stopGroup(_ group: RunningGroup) {
+        let key = "group-\(group.id)"
+        let targets = group.servers.filter { !$0.isBackground }
+        pending.insert(key)
+        targets.forEach { pending.insert("pid-\($0.pid)") }
+        group.containers.forEach { pending.insert("ctr-\($0.containerId)") }
+        Task {
+            defer {
+                pending.remove(key)
+                targets.forEach { pending.remove("pid-\($0.pid)") }
+                group.containers.forEach { pending.remove("ctr-\($0.containerId)") }
+            }
+            let items: [[String: Any]] = targets.map { ["action_type": "kill", "pid": $0.pid] }
+                + group.containers.map { ["action_type": "stop_container", "container_id": $0.containerId] }
+            do {
+                let result = try await bridge.request("cleanup", ["items": items], as: CleanupResult.self)
+                let done = result.killed + result.stopped
+                showToast("Stopped \(done) of \(items.count) in \(group.name)", isError: result.failed > 0)
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+        }
+    }
+
     func runCleanup(_ items: [CleanupSuggestion]) async {
         let payload: [[String: Any]] = items.map { item in
             var dict: [String: Any] = ["action_type": item.actionType]
@@ -314,6 +368,34 @@ final class Store {
     func push(_ route: Route) { routes.append(route) }
     func pop() { _ = routes.popLast() }
 
+    func focusSearch() { searchFocusRequest += 1 }
+
+    func isCollapsed(_ group: RunningGroup) -> Bool {
+        toggledGroups.contains(group.id) ? !group.collapsedByDefault : group.collapsedByDefault
+    }
+
+    func toggleCollapsed(_ group: RunningGroup) {
+        if toggledGroups.contains(group.id) { toggledGroups.remove(group.id) } else { toggledGroups.insert(group.id) }
+    }
+
+    /// The welcome tour on a fresh install, or release notes for versions not seen yet.
+    var whatsNew: (welcome: Bool, releases: [WhatsNew.Release])? {
+        guard let current = WhatsNew.currentVersion, whatsNewSeen != current else { return nil }
+        if UserDefaults.standard.bool(forKey: WhatsNew.welcomeKey) { return (true, []) }
+        let releases = WhatsNew.releases(after: whatsNewSeen)
+        return releases.isEmpty ? nil : (false, releases)
+    }
+
+    func markWhatsNewSeen() {
+        guard let current = WhatsNew.currentVersion else { return }
+        UserDefaults.standard.set(current, forKey: WhatsNew.seenKey)
+        UserDefaults.standard.removeObject(forKey: WhatsNew.welcomeKey)
+        whatsNewSeen = current
+    }
+
+    func dismiss(_ item: AttentionItem) { dismissed[item.id] = item.signature }
+    func isDismissed(_ item: AttentionItem) -> Bool { dismissed[item.id] == item.signature }
+
     func showToast(_ message: String, isError: Bool = false) {
         toast = Toast(message: message, isError: isError)
         toastTask?.cancel()
@@ -337,36 +419,38 @@ final class Store {
     }
 }
 
-/// Detects servers and containers appearing or disappearing between snapshots.
+/// Detects dev servers and containers appearing or disappearing between snapshots.
+/// Services and background processes are not reported.
 struct ChangeTracker {
     private var initialized = false
-    private var nodePorts: [Int: (name: String, ports: [Int])] = [:]
+    private var serverPorts: [Int: (name: String, ports: [Int])] = [:]
     private var containers: [String: String] = [:]
 
-    mutating func diff(node: [NodeProcess], docker: [DockerContainer], watchedPorts: [Int]) -> [String] {
-        let currentPorts = Dictionary(uniqueKeysWithValues: node.map { ($0.pid, (name: $0.displayName, ports: $0.ports)) })
+    mutating func diff(servers: [Server], docker: [DockerContainer], watchedPorts: [Int]) -> [String] {
+        let apps = servers.filter { $0.kind == "app" }
+        let currentPorts = Dictionary(apps.map { ($0.pid, (name: $0.reportName, ports: $0.ports)) }, uniquingKeysWith: { a, _ in a })
         let currentContainers = Dictionary(docker.map { ($0.containerId, $0.displayName) }, uniquingKeysWith: { a, _ in a })
         defer {
-            nodePorts = currentPorts
+            serverPorts = currentPorts
             containers = currentContainers
             initialized = true
         }
         guard initialized else { return [] }
 
         var events: [String] = []
-        for (pid, previous) in nodePorts where currentPorts[pid] == nil && !previous.ports.isEmpty {
+        for (pid, previous) in serverPorts where currentPorts[pid] == nil && !previous.ports.isEmpty {
             events.append("\(previous.name) on \(portList(previous.ports)) exited")
         }
         for (id, name) in containers where currentContainers[id] == nil {
             events.append("Container \(name) stopped")
         }
-        for proc in node where !proc.ports.isEmpty {
-            let previous = nodePorts[proc.pid]?.ports ?? []
-            if nodePorts[proc.pid] == nil {
-                events.append("\(proc.displayName) started on \(portList(proc.ports))")
+        for server in apps where !server.ports.isEmpty {
+            let previous = serverPorts[server.pid]?.ports ?? []
+            if serverPorts[server.pid] == nil {
+                events.append("\(server.reportName) started on \(portList(server.ports))")
             } else {
-                for port in proc.ports where watchedPorts.contains(port) && !previous.contains(port) {
-                    events.append("Watched port :\(port) active (\(proc.displayName))")
+                for port in server.ports where watchedPorts.contains(port) && !previous.contains(port) {
+                    events.append("Watched port :\(port) active (\(server.reportName))")
                 }
             }
         }
