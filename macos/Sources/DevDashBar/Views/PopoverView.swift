@@ -500,7 +500,7 @@ private struct FooterBar: View {
             }
             IconButton(symbol: "square.and.arrow.up", help: "Export JSON snapshot") { store.export() }
             IconButton(symbol: "terminal", help: "Open devdash TUI in Terminal") {
-                Launcher.runInTerminal("devdash", in: NSHomeDirectory())
+                Launcher.runInTerminal(store.executable.map { Launcher.shellQuote($0.path) } ?? "devdash", in: NSHomeDirectory())
             }
             Spacer()
             IconButton(symbol: "gearshape", help: "Settings") { store.push(.settings) }

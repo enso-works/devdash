@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Also applies when run unbundled via `swift run`, where LSUIElement is absent.
         NSApp.setActivationPolicy(.accessory)
+        MainActor.assumeIsolated { Updater.shared.start() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

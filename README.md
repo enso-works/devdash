@@ -24,6 +24,18 @@ devdash shows all of it on one screen:
 
 ## Install
 
+### macOS menu bar app
+
+Download `DevDash-<version>-macos.dmg` from the [latest release](https://github.com/enso-works/devdash/releases/latest) and drag DevDash to Applications, or use Homebrew:
+
+```sh
+brew install --cask enso-works/tap/devdash
+```
+
+The app is signed with a Developer ID and notarized by Apple, and it updates itself. It includes the devdash CLI with its own Python, so you don't need to install anything else. To use the terminal UI as well, open the app's Settings and click Install next to "Command line tool". This links `devdash` into `~/.local/bin`. Homebrew links it for you.
+
+### Terminal UI (macOS and Linux)
+
 Requires Python 3.10+ and git. On macOS this also installs the menu bar app.
 
 ```sh
@@ -119,7 +131,7 @@ Everything is computed locally. The only network request is the plan-limits look
 
 ### How it works
 
-The app is a small SwiftUI program that runs `devdash --serve` in the background. That process sends a JSON snapshot every few seconds and accepts commands (kill, stop, details, usage and so on) over stdin/stdout, so the terminal UI and the app share the same data code. If the CLI is missing or too old, the app shows the command to fix it and can run it in Terminal.
+The app is a small SwiftUI program that runs `devdash --serve` in the background. Release builds run the copy of devdash bundled inside the app. Local builds use the CLI from your checkout or `PATH`. That process sends a JSON snapshot every few seconds and accepts commands (kill, stop, details, usage and so on) over stdin/stdout, so the terminal UI and the app share the same data code. If the CLI is missing or too old, the app shows the command to fix it and can run it in Terminal.
 
 ## Terminal UI
 
@@ -212,24 +224,30 @@ The app needs Xcode 16+ (Swift 6) and macOS 14+. Useful tools:
 | `macos/.build/release/DevDashBar --scan <path>` | Run the disk scanner and print totals, timing and cleanup suggestions |
 | `DEVDASH_DEMO=1 macos/.build/debug/DevDashBar --render <dir>` | Render every app screen to PNG using demo data |
 | `scripts/screenshots.sh` | Regenerate all README screenshots from demo data |
+| `EMBED_PYTHON=1 macos/scripts/build-app.sh` | Local build with the CLI and Python embedded, like a release |
 | `swift macos/scripts/make-icon.swift` | Regenerate the app icon |
 
 ### Releases
 
-`macos/scripts/build-app.sh --release` builds a universal (Apple Silicon and Intel) app and writes a zip, a DMG and checksums to `macos/dist/`.
+`macos/scripts/build-app.sh --release` builds a universal (Apple Silicon and Intel) app and writes a zip, a DMG and checksums to `macos/dist/`. The release build also does the following:
+- It embeds a universal CPython from [python-build-standalone](https://github.com/astral-sh/python-build-standalone), with devdash and its dependencies installed and precompiled (`macos/scripts/embed-python.sh`).
+- It embeds Sparkle.
+- It signs every binary, innermost first, with the hardened runtime.
 
-Pushing a `v*` tag runs [the macOS workflow](.github/workflows/macos-app.yml). It self-tests the bridge, builds the release, and attaches the artifacts to the GitHub release, where `install.sh` picks them up.
+Pushing a `v*` tag runs [the macOS workflow](.github/workflows/macos-app.yml). It self-tests the bridge, then builds, signs and notarizes the release. It writes the Sparkle `appcast.xml` and attaches everything to the GitHub release. The app checks `releases/latest/download/appcast.xml` for updates, and `install.sh` downloads the zip.
 
-Without signing secrets, the app is ad-hoc signed. It opens normally when installed with `install.sh`. A copy downloaded in a browser has to be allowed once, in System Settings > Privacy & Security > Open Anyway. For a Developer ID signed and notarized build, add these repository secrets:
+Repository secrets used by the workflow. Without them the build is ad-hoc signed and has no update feed.
 
 | Secret | Value |
 |--------|-------|
-| `MACOS_CERT_P12` | base64 of the exported Developer ID Application certificate (.p12) |
+| `MACOS_CERT_P12` | base64 of the exported Developer ID Application certificate and key (.p12) |
 | `MACOS_CERT_PASSWORD` | password of the .p12 |
-| `MACOS_SIGN_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
-| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | notarization credentials (app-specific password) |
+| `MACOS_SIGN_IDENTITY` | `Developer ID Application: Name (TEAMID)` |
+| `APPLE_API_KEY_P8` | base64 of an App Store Connect API key (.p8), used by `notarytool` |
+| `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | the key ID and issuer ID of that key |
+| `SPARKLE_PRIVATE_KEY` | EdDSA update signing key (`generate_keys --account devdash -x <file>`) |
 
-Locally: `SIGN_IDENTITY=... NOTARY_PROFILE=<notarytool profile> macos/scripts/build-app.sh --release`.
+Locally: `SIGN_IDENTITY="Developer ID Application: ..." NOTARY_PROFILE=<notarytool profile> macos/scripts/build-app.sh --release`, then `macos/scripts/make-appcast.py <zip> <version> <build>` for the feed. The public key in `build-app.sh` must match the private key.
 
 ### Project structure
 
@@ -248,7 +266,7 @@ macos/
   Sources/DevDashBar/   # SwiftUI menu bar app (bridge client, store, views)
     Disk/               # disk scanner, cache, cleanup rules, treemap and Disk window
   Resources/            # app icon
-  scripts/              # build-app.sh, make-icon.swift
+  scripts/              # build-app.sh, embed-python.sh, make-appcast.py, make-icon.swift
 scripts/                # screenshot generation
 .github/workflows/      # macOS build and release
 install.sh              # one-line installer
@@ -257,7 +275,9 @@ install.sh              # one-line installer
 ## Uninstall
 
 ```sh
-rm -rf ~/.devdash ~/.local/bin/devdash ~/Applications/DevDash.app
+brew uninstall --cask devdash                                   # if installed with Homebrew
+rm -rf /Applications/DevDash.app ~/Applications/DevDash.app     # the app
+rm -rf ~/.devdash ~/.local/bin/devdash                          # the CLI from install.sh
 ```
 
 If you turned on launch at login, turn it off in the app's Settings first, or remove DevDash under System Settings > General > Login Items.
