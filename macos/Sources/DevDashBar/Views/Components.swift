@@ -18,6 +18,11 @@ enum Format {
         return String(format: "%.1f MB/s", bps / (1024 * 1024))
     }
 
+    /// `/Users/x/code/app` -> `~/code/app`.
+    static func shortPath(_ path: String) -> String {
+        path.replacing(#/^/Users/[^/]+(?=/|$)/#, with: "~")
+    }
+
     static func count(_ n: Int) -> String {
         if n >= 1_000_000_000 { return String(format: "%.1fB", Double(n) / 1e9) }
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1e6) }

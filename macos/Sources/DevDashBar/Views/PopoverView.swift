@@ -41,6 +41,7 @@ private struct RouteView: View {
         case .heatmap: HeatmapView()
         case .usage: UsageView()
         case .settings: SettingsView()
+        case .whatsNew: WhatsNewView()
         }
     }
 }
@@ -79,32 +80,26 @@ private struct MainView: View {
                 Text("Collecting processes...").font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 6)
                 Spacer()
             default:
-                StatsStrip()
+                AttentionSection()
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
                 TabBar()
                     .padding(.horizontal, 12)
-                SearchField()
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
+                HStack(spacing: 6) {
+                    SearchField()
+                    if store.tab == .running {
+                        GroupingMenu()
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
                 Divider().padding(.top, 8).opacity(0.5)
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: []) {
-                        if store.tab == .dev || store.tab == .docker, !store.cleanup.isEmpty {
-                            CleanupBanner()
-                                .padding(.horizontal, 4)
-                                .padding(.top, 8)
-                        }
-                        if store.tab == .dev || store.tab == .docker {
-                            DiskBanner()
-                                .padding(.horizontal, 4)
-                                .padding(.top, 6)
-                        }
                         switch store.tab {
-                        case .dev: DevTab()
-                        case .docker: DockerTab()
-                        case .system: SystemTab()
+                        case .running: RunningTab()
                         case .claude: ClaudeTab()
+                        case .system: SystemTab()
                         }
                     }
                     .padding(.horizontal, 8)
@@ -114,6 +109,14 @@ private struct MainView: View {
             }
             Divider().opacity(0.5)
             FooterBar()
+        }
+        .background {
+            // Cmd+F from anywhere in the popover.
+            Button("Filter") { store.focusSearch() }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
     }
 }
@@ -187,6 +190,18 @@ private struct HeaderView: View {
             StatusDot(color: statusColor)
                 .help(statusHelp)
             Spacer()
+            if let system = store.system {
+                Button {
+                    withAnimation(.snappy(duration: 0.22)) { store.tab = .system }
+                } label: {
+                    HStack(spacing: 8) {
+                        HeaderMetric(label: "CPU", value: system.cpuPercent)
+                        HeaderMetric(label: "Mem", value: system.memoryPercent)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Show the System tab")
+            }
             if let lastUpdate = store.lastUpdate {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(relative(lastUpdate, now: context.date))
@@ -224,70 +239,17 @@ private struct HeaderView: View {
     }
 }
 
-// MARK: - Stats strip
-
-private struct StatsStrip: View {
+private struct HeaderMetric: View {
     @Environment(Store.self) private var store
-
-    var body: some View {
-        if let system = store.system {
-            HStack(spacing: 8) {
-                GaugeTile(
-                    title: "CPU",
-                    value: system.cpuPercent,
-                    detail: "\(system.cpuCount) cores",
-                    tint: store.config.severity(system.cpuPercent)
-                ) {
-                    Sparkline(values: store.cpuHistory, tint: store.config.severity(system.cpuPercent))
-                        .frame(height: 18)
-                        .opacity(0.5)
-                }
-                GaugeTile(
-                    title: "Memory",
-                    value: system.memoryPercent,
-                    detail: String(format: "%.1f / %.0f GB", system.memoryUsedGb, system.memoryTotalGb),
-                    tint: store.config.severity(system.memoryPercent)
-                ) { EmptyView() }
-                GaugeTile(
-                    title: "Disk",
-                    value: system.diskPercent,
-                    detail: String(format: "%.0f GB free", system.diskFreeGb),
-                    tint: store.config.severity(system.diskPercent)
-                ) { EmptyView() }
-            }
-        }
-    }
-}
-
-private struct GaugeTile<Extra: View>: View {
-    let title: String
+    let label: String
     let value: Double
-    let detail: String
-    let tint: Color
-    @ViewBuilder let background: () -> Extra
 
     var body: some View {
-        HStack(spacing: 8) {
-            ZStack {
-                RingGauge(value: value / 100, tint: tint, lineWidth: 3.5)
-                Text("\(Int(value.rounded()))")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded).monospacedDigit())
-            }
-            .frame(width: 32, height: 32)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: 11, weight: .semibold))
-                Text(detail)
-                    .font(.system(size: 9.5).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            Spacer(minLength: 0)
+        HStack(spacing: 3) {
+            Text(label).foregroundStyle(.secondary)
+            Text("\(Int(value.rounded()))%").foregroundStyle(store.config.metricTint(value))
         }
-        .frame(maxWidth: .infinity)
-        .padding(8)
-        .background(alignment: .bottom) { background().clipShape(.rect(cornerRadius: 10)) }
-        .card(radius: 10, padding: 0)
+        .font(.system(size: 10.5, weight: .medium).monospacedDigit())
     }
 }
 
@@ -299,7 +261,7 @@ private struct TabBar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(visibleTabs) { tab in
+            ForEach(Array(visibleTabs.enumerated()), id: \.element) { index, tab in
                 let selected = store.tab == tab
                 Button {
                     withAnimation(.snappy(duration: 0.22)) { store.tab = tab }
@@ -325,6 +287,8 @@ private struct TabBar: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
+                .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                .help("\(tab.title) (Cmd+\(index + 1))")
             }
         }
         .padding(2)
@@ -337,10 +301,9 @@ private struct TabBar: View {
 
     private func count(for tab: Tab) -> Int? {
         switch tab {
-        case .dev: store.servers.count
-        case .docker: store.docker.count
-        case .system: nil
+        case .running: store.activeCount
         case .claude: store.claude?.instances.count
+        case .system: nil
         }
     }
 }
@@ -355,10 +318,11 @@ private struct SearchField: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            TextField("Filter by name, port, path...", text: $store.query)
+            TextField(placeholder, text: $store.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($focused)
+                .onChange(of: store.searchFocusRequest) { focused = true }
             if !store.query.isEmpty {
                 Button {
                     store.query = ""
@@ -374,111 +338,41 @@ private struct SearchField: View {
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(focused ? Color.accentColor.opacity(0.5) : .clear))
         .onExitCommand { store.query = "" }
     }
+
+    private var placeholder: String {
+        switch store.tab {
+        case .running: "Filter by project, port, name..."
+        case .claude: "Filter projects and sessions..."
+        case .system: "Filter processes..."
+        }
+    }
 }
 
-// MARK: - Cleanup banner
-
-private struct CleanupBanner: View {
+private struct GroupingMenu: View {
     @Environment(Store.self) private var store
 
     var body: some View {
-        Button {
-            store.push(.cleanup)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .frame(width: 26, height: 26)
-                    .background(.orange.opacity(0.15), in: .circle)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("\(store.cleanup.count) cleanup suggestion\(store.cleanup.count == 1 ? "" : "s")")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(summary)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Text("Review")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.orange)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+        @Bindable var store = store
+        Menu {
+            Picker("Group By", selection: $store.grouping) {
+                ForEach(Grouping.allCases) { Text($0.title).tag($0) }
             }
-            .card(radius: 10, padding: 8)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var summary: String {
-        let groups = Dictionary(grouping: store.cleanup, by: \.category)
-        let order = ["idle", "orphan", "zombie", "stale_container"]
-        let names = ["idle": "idle", "orphan": "orphaned", "zombie": "zombie", "stale_container": "stale containers"]
-        return order.compactMap { key in groups[key].map { "\($0.count) \(names[key] ?? key)" } }.joined(separator: " · ")
-    }
-}
-
-// MARK: - Disk banner
-
-/// Full-width row that opens the Disk tree window, with free space and reclaimable size.
-private struct DiskBanner: View {
-    @Environment(DiskStore.self) private var disk
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button {
-            openWindow(id: "disk")
-            NSApp.activate(ignoringOtherApps: true)
+            .pickerStyle(.inline)
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "internaldrive")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 26, height: 26)
-                    .background(Color.accentColor.opacity(0.15), in: .circle)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.system(size: 12, weight: .semibold))
-                    Text(subtitle)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                if disk.isScanning {
-                    ProgressView().controlSize(.mini)
-                }
-                Text("Open")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+            HStack(spacing: 4) {
+                Image(systemName: store.grouping == .project ? "square.stack.3d.up" : "list.bullet.indent")
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(store.grouping.title).font(.system(size: 11.5, weight: .medium))
             }
-            .card(radius: 10, padding: 8)
-            .contentShape(.rect)
+            .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
-    }
-
-    private var title: String {
-        if disk.reclaimableTotal > 0 { return "Disk tree · \(ByteFormat.string(disk.reclaimableTotal)) worth a look" }
-        return "Disk tree"
-    }
-
-    private var subtitle: String {
-        var parts: [String] = []
-        if let volume = disk.volume { parts.append("\(ByteFormat.string(volume.free)) free") }
-        if disk.isScanning {
-            parts.append("scanning \(Format.count(Int(disk.progress.files))) files")
-        } else if disk.root == nil {
-            parts.append("see what takes up space")
-        } else if let date = disk.scanDate {
-            parts.append("scanned " + date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
-        }
-        return parts.joined(separator: " · ")
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.visible)
+        .fixedSize()
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(.primary.opacity(0.045), in: .rect(cornerRadius: 7))
+        .help("Group by project or by type")
     }
 }
 
@@ -490,24 +384,64 @@ private struct FooterBar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            IconButton(symbol: "internaldrive", help: "Disk tree") {
+            FooterButton(title: "Disk tree", symbol: "internaldrive") {
                 openWindow(id: "disk")
                 NSApp.activate(ignoringOtherApps: true)
             }
-            IconButton(symbol: "point.3.connected.trianglepath.dotted", help: "Dependency graph") { store.push(.graph) }
+            FooterButton(title: "Graph", symbol: "point.3.connected.trianglepath.dotted") { store.push(.graph) }
             if store.hasClaude {
-                IconButton(symbol: "square.grid.3x3.fill", help: "Claude activity heatmap") { store.push(.heatmap) }
-            }
-            IconButton(symbol: "square.and.arrow.up", help: "Export JSON snapshot") { store.export() }
-            IconButton(symbol: "terminal", help: "Open devdash TUI in Terminal") {
-                Launcher.runInTerminal(store.executable.map { Launcher.shellQuote($0.path) } ?? "devdash", in: NSHomeDirectory())
+                FooterButton(title: "Activity", symbol: "square.grid.3x3.fill") { store.push(.heatmap) }
             }
             Spacer()
+            Menu {
+                Button("Export JSON Snapshot") { store.export() }
+                Button("Open Terminal UI") {
+                    Launcher.runInTerminal(store.executable.map { Launcher.shellQuote($0.path) } ?? "devdash", in: NSHomeDirectory())
+                }
+                Button("What's New") { store.push(.whatsNew) }
+                if Updater.shared.isAvailable {
+                    Button("Check for Updates...") { Updater.shared.checkForUpdates() }
+                }
+                Divider()
+                Button("Quit devdash") { NSApp.terminate(nil) }
+                    .keyboardShortcut("q", modifiers: .command)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 24, height: 24)
+                    .contentShape(.rect)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More")
             IconButton(symbol: "gearshape", help: "Settings") { store.push(.settings) }
-            IconButton(symbol: "power", help: "Quit devdash") { NSApp.terminate(nil) }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+    }
+}
+
+private struct FooterButton: View {
+    let title: String
+    let symbol: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 10.5, weight: .semibold))
+                Text(title).font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(.primary.opacity(hovering ? 1 : 0.75))
+            .padding(.horizontal, 7)
+            .frame(height: 24)
+            .background(.primary.opacity(hovering ? 0.1 : 0), in: .rect(cornerRadius: 6))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 

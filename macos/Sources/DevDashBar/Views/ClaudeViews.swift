@@ -134,24 +134,29 @@ private struct StatsCard: View {
     }
 }
 
-private struct ClaudeInstanceRow: View {
+struct ClaudeInstanceRow: View {
     @Environment(Store.self) private var store
     let instance: ClaudeInstance
+    /// Inside a project group, where the project name is already in the header.
+    var inGroup = false
 
     var body: some View {
         HoverRow(onTap: { store.push(.claudeProject(path: instance.cwdFull)) }) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    StatusDot(color: .green, pulsing: instance.cpuPercent > 5)
-                    Text(instance.project.isEmpty ? "claude" : instance.project)
-                        .font(.system(size: 12.5, weight: .semibold))
+            HStack(spacing: 8) {
+                if inGroup { RuntimeBadge(runtime: "claude") }
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        if !inGroup { StatusDot(color: .green, pulsing: instance.cpuPercent > 5) }
+                        Text(inGroup ? "Claude session" : (instance.project.isEmpty ? "claude" : instance.project))
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    Text(inGroup ? "\(instance.tty)  ·  up \(instance.uptime)" : "\(instance.cwd)  ·  \(instance.tty)  ·  up \(instance.uptime)")
+                        .font(.system(size: inGroup ? 10.5 : 10))
+                        .foregroundStyle(inGroup ? .secondary : .tertiary)
                         .lineLimit(1)
+                        .truncationMode(.head)
                 }
-                Text("\(instance.cwd)  ·  \(instance.tty)  ·  up \(instance.uptime)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
             }
         } metrics: {
             VStack(alignment: .trailing, spacing: 3) {

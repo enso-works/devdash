@@ -8,6 +8,10 @@ struct VolumeInfo: Sendable {
     let free: Int64
 
     var used: Int64 { total - free }
+    /// Below 15 GiB or 5% free.
+    var isLow: Bool {
+        total > 0 && (free < 15 * 1_073_741_824 || Double(free) / Double(total) < 0.05)
+    }
 
     static func forPath(_ path: String) -> VolumeInfo? {
         let keys: Set<URLResourceKey> = [.volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]
@@ -64,6 +68,7 @@ final class DiskStore {
     @ObservationIgnored private var didLoadCache = false
 
     static let rootKey = "diskScanRoot"
+    static let reclaimableKey = "diskReclaimable"
 
     var rootPath: String {
         get { UserDefaults.standard.string(forKey: Self.rootKey) ?? NSHomeDirectory() }
@@ -71,6 +76,9 @@ final class DiskStore {
     }
 
     var reclaimableTotal: Int64 { suggestions.reduce(0) { $0 + $1.size } }
+    /// Reclaimable space from the last scan, remembered across launches so it is known before the tree loads.
+    private(set) var lastReclaimable = Int64(UserDefaults.standard.integer(forKey: DiskStore.reclaimableKey))
+    var knownReclaimable: Int64 { root != nil ? reclaimableTotal : lastReclaimable }
     var skippedFolders: [DiskNode] {
         var result: [DiskNode] = []
         root?.forEach { if $0.skippedReason == "Needs Full Disk Access" { result.append($0) } }
@@ -175,6 +183,7 @@ final class DiskStore {
         self.scanDate = date
         self.scanDuration = duration
         self.suggestions = suggestions
+        rememberReclaimable()
         viewRoot = previousPath.flatMap { find(path: $0, in: root) } ?? root
         selection = nil
         refreshVolume()
@@ -196,6 +205,12 @@ final class DiskStore {
         }
     }
 
+    private func rememberReclaimable() {
+        guard !DiskDemo.isEnabled else { return }
+        lastReclaimable = reclaimableTotal
+        UserDefaults.standard.set(Int(reclaimableTotal), forKey: Self.reclaimableKey)
+    }
+
     func refreshVolume() {
         guard !DiskDemo.isEnabled else { return }
         volume = VolumeInfo.forPath(rootPath)
@@ -203,9 +218,7 @@ final class DiskStore {
     }
 
     private func notifyIfLow() {
-        guard let volume, volume.total > 0 else { return }
-        let lowBytes: Int64 = 15 * 1024 * 1024 * 1024
-        guard volume.free < lowBytes || Double(volume.free) / Double(volume.total) < 0.05 else { return }
+        guard let volume, volume.isLow else { return }
         if let last = lastLowDiskNotice, Date.now.timeIntervalSince(last) < 12 * 3600 { return }
         lastLowDiskNotice = .now
         guard UserDefaults.standard.object(forKey: SettingsKey.notifications) as? Bool ?? true else { return }
@@ -350,6 +363,7 @@ final class DiskStore {
         guard let root else { return }
         DiskClassifier.apply(to: root)
         suggestions = DiskSuggestionEngine.suggestions(for: root)
+        rememberReclaimable()
         revision += 1
         refreshVolume()
         let path = rootPath

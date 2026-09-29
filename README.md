@@ -14,7 +14,7 @@ If you use Claude Code (or any AI coding agent) across several projects, backgro
 
 devdash shows all of it on one screen:
 
-- **Dev servers**: every Node process with the ports it holds, its memory and CPU, and the project it belongs to (read from `package.json`).
+- **Dev servers**: every process listening on a port, in any language (Node, Bun, Deno, Python, Ruby, Go, Rust and more), with its memory, CPU and the project it belongs to. Local databases such as Homebrew Postgres show up as services.
 - **Docker**: containers grouped by Compose stack, with status, health and ports.
 - **Cleanup**: flags idle, orphaned and zombie processes and long-running containers, and lets you remove them in one click.
 - **Disk tree**: a treemap of your home folder that shows what takes up space and suggests what you can safely reclaim.
@@ -63,9 +63,9 @@ open ~/Applications/DevDash.app
 
 The menu bar shows how many dev servers and containers are running, plus your current Claude session usage (for example `9 · 42%`). The icon switches to a flame when CPU or memory goes over your configured threshold. Click it to open the dashboard.
 
-| Dev servers | Docker | System |
+| Running, by project | Project overview | System |
 |---|---|---|
-| ![Dev](screenshots/app/dev.png) | ![Docker](screenshots/app/docker.png) | ![System](screenshots/app/system.png) |
+| ![Running](screenshots/app/running.png) | ![Project overview](screenshots/app/running-collapsed.png) | ![System](screenshots/app/system.png) |
 | **Claude** | **Claude usage** | **Cleanup** |
 | ![Claude](screenshots/app/claude.png) | ![Usage](screenshots/app/usage.png) | ![Cleanup](screenshots/app/cleanup.png) |
 | **Claude project** | **Process details** | **Dependency graph** |
@@ -73,15 +73,18 @@ The menu bar shows how many dev servers and containers are running, plus your cu
 
 What you can do:
 
-- **Dev**: click a port chip to open `localhost:<port>`. Hover a row to reveal it in Finder, open it in your editor, or kill it (click twice to confirm). Click a row for process details: command, children, network connections, open files and environment.
-- **Docker**: containers are grouped by Compose project, and "Stop all" stops a whole stack. Click a container to stream its logs in a separate window, with filtering, follow mode and copy.
-- **System**: memory, swap, disk and network usage, plus the top processes sorted by memory or CPU.
+- **Needs you**: one list at the top for anything that wants your attention: cleanup suggestions, low disk space, disk space worth a look, and plan limits over 80%. Dismiss an item and it stays hidden until it changes. The list disappears when there is nothing to show.
+- **Running**: dev servers, Docker containers and Claude sessions, grouped by project (the git repository they run in). Each project header shows the branch and has a menu to open the project in your editor, Finder or Terminal, start a Claude session there, or stop everything in it. Services, servers outside any project and Node processes without a port are grouped at the bottom. Choose **Type** next to the filter to group by dev servers, Compose stacks, Claude sessions, services and background processes instead.
+  - Click a port chip to open `localhost:<port>`. Hover a row to open it in your editor or kill it (click twice to confirm). Right-click any row for all its actions.
+  - Click a server for process details: command, children, network connections, open files and environment. Click a container to stream its logs in a separate window, with filtering, follow mode and copy.
+- **System**: CPU, memory, disk, swap and network, the Disk tree summary, and the top processes sorted by memory or CPU. The header shows CPU and memory on every tab; click it to open this tab.
 - **Claude**:
   - plan limits and API-equivalent cost;
   - running sessions, projects and recent sessions;
   - project pages with one-click launch: new session, continue, plan mode, resume picker, skip permissions, or a plain terminal in that folder.
-- **Cleanup**: shown as a banner when devdash finds idle, orphaned or zombie processes, or containers running longer than your stale threshold. Pick which ones to remove and clean them up together.
-- **Footer**: dependency graph, activity heatmap, JSON export, open the terminal UI, settings.
+- **Cleanup**: listed under Needs you when devdash finds idle, orphaned or zombie processes, or containers running longer than your stale threshold. Pick which ones to remove and clean them up together.
+- **Footer**: Disk tree, dependency graph and activity heatmap. The `...` menu has JSON export, the terminal UI, What's new, Check for updates and Quit.
+- **Keyboard**: Cmd+1 to Cmd+3 switch tabs, Cmd+F filters, Esc clears the filter.
 - **Notifications**: a macOS notification when a dev server starts or exits, a container stops, or a watched port comes up.
 - **Settings**: launch at login, editor (VS Code or Cursor), whether the menu bar shows the count and usage percentage, notifications, and a custom `devdash` path.
 
@@ -89,7 +92,7 @@ What you can do:
 
 ![Disk tree](screenshots/app/disk-tree.png)
 
-Open it from the Disk tree row on the Dev and Docker tabs, the Disk card on the System tab, or the drive icon in the popover footer.
+Open it from the Disk tree button in the popover footer, the Disk card on the System tab, or the Needs you row when devdash finds space worth a look.
 
 - **Treemap**:
   - Every folder is a box sized by disk usage, nested up to the chosen depth.

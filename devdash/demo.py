@@ -29,6 +29,21 @@ NODE = [
     (27640, "old-prototype", "vite --port 5173", "~/code/old-prototype", [], "4d 6h", 88.0, 0.0),
 ]
 
+SERVERS = [
+    # pid, label, runtime, kind, command, cwd, ports, uptime, mem, cpu, project_root, project_name, package
+    (41822, "next dev", "node", "app", "next dev --turbo", "~/code/storefront/apps/web", [3000], "2h 14m", 612.0, 6.0, "~/code/storefront", "storefront", "web"),
+    (41907, "server.ts", "node", "app", "node --watch src/server.ts", "~/code/storefront/apps/api", [4000], "2h 14m", 188.0, 1.5, "~/code/storefront", "storefront", "api"),
+    (52310, "storybook", "node", "app", "storybook dev -p 6006", "~/code/design-system", [6006], "48m", 402.0, 0.8, "~/code/design-system", "design-system", ""),
+    (53877, "uvicorn", "python", "app", "python -m uvicorn app.main:app --reload --port 8000", "~/code/analytics", [8000], "3h 40m", 96.0, 0.6, "~/code/analytics", "analytics", ""),
+    (58120, "gateway", "go", "app", "/var/folders/x/go-build123/b001/exe/gateway", "~/code/gateway", [8080], "25m", 34.0, 0.2, "~/code/gateway", "gateway", ""),
+    (60114, "astro", "node", "app", "astro dev", "~/code/docs", [4321], "12m", 142.0, 0.4, "~/code/docs", "docs", ""),
+    (1204, "mysqld", "mysql", "service", "/opt/homebrew/opt/mysql/bin/mysqld", "/opt/homebrew/var/mysql", [3306, 33060], "6d 2h", 410.0, 0.3, "", "", ""),
+    (33410, "cloudflared", "other", "app", "cloudflared tunnel --url http://localhost:3000", "~", [20241], "1h 10m", 22.0, 0.1, "", "", ""),
+    (38001, "mcp-server-github", "node", "background", "node ~/.npm/_npx/mcp-server-github/dist/index.js", "~", [], "1d 3h", 96.0, 0.0, "", "", ""),
+    (38012, "chrome-devtools-mcp", "node", "background", "node ~/.npm/_npx/chrome-devtools-mcp/build/index.js", "~", [], "1d 3h", 131.0, 0.0, "", "", ""),
+    (27640, "vite", "node", "background", "vite --port 5173", "~/code/old-prototype", [], "4d 6h", 88.0, 0.0, "~/code/old-prototype", "old-prototype", ""),
+]
+
 DOCKER = [
     ("a1b2c3d4e5f6", "storefront-postgres-1", "postgres:17", "Up 2 hours (healthy)", "0.0.0.0:5432->5432/tcp", "2 hours ago", "storefront", "postgres"),
     ("b2c3d4e5f6a7", "storefront-redis-1", "redis:7-alpine", "Up 2 hours", "0.0.0.0:6379->6379/tcp", "2 hours ago", "storefront", "redis"),
@@ -75,10 +90,36 @@ def node() -> list[dict]:
     return result
 
 
+def _full(path: str) -> str:
+    return path.replace("~", HOME, 1) if path.startswith("~") else path
+
+
+def servers() -> list[dict]:
+    now = time.time()
+    result = []
+    for i, (pid, label, runtime, kind, command, cwd, ports, uptime, mem, cpu, root, project, package) in enumerate(SERVERS):
+        result.append({
+            "pid": pid, "name": runtime if runtime != "other" else label, "label": label, "runtime": runtime,
+            "kind": kind, "command": command, "cpu_percent": round(_wave(cpu, cpu * 0.6, phase=pid), 1),
+            "memory_mb": mem + random.uniform(-4, 4), "ports": ports, "uptime": uptime,
+            "started": now - 600 * (i + 1), "cwd": cwd, "cwd_full": _full(cwd),
+            "project_root": _full(root), "project_name": project, "package": package,
+        })
+    return result
+
+
+BRANCHES = {"storefront": "feat/checkout", "design-system": "main", "analytics": "perf/events", "gateway": "main", "docs": "docs/v3"}
+
+
+def projects() -> list[dict]:
+    return [{"root": f"{HOME}/code/{name}", "name": name, "branch": branch} for name, branch in BRANCHES.items()]
+
+
 def docker() -> list[dict]:
     return [
         {"container_id": cid, "name": name, "image": image, "status": status, "ports": ports,
-         "created": created, "compose_project": project, "compose_service": service}
+         "created": created, "compose_project": project, "compose_service": service,
+         "compose_working_dir": f"{HOME}/code/{project}" if project else ""}
         for cid, name, image, status, ports, created, project, service in DOCKER
     ]
 

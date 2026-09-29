@@ -6,7 +6,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DEVDASH="$REPO/.venv/bin/devdash"
 OUT="$REPO/screenshots"
-APP_SHOTS=(hero dev docker system claude usage cleanup graph heatmap project detail)
+APP_SHOTS=(hero running running-collapsed system claude usage cleanup graph heatmap project detail)
 
 echo "==> Terminal UI"
 "$REPO/.venv/bin/python" "$REPO/scripts/tui_screenshots.py" "$OUT"

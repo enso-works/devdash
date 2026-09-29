@@ -59,6 +59,7 @@ class DockerContainer:
     created: str
     compose_project: str = ""
     compose_service: str = ""
+    compose_working_dir: str = ""
 
 
 def _format_uptime(seconds: float) -> str:
@@ -201,6 +202,7 @@ def get_docker_containers() -> list[DockerContainer]:
                 created=data["created"],
                 compose_project=labels.get("com.docker.compose.project", ""),
                 compose_service=labels.get("com.docker.compose.service", ""),
+                compose_working_dir=labels.get("com.docker.compose.project.working_dir", ""),
             ))
         except (json.JSONDecodeError, KeyError):
             continue

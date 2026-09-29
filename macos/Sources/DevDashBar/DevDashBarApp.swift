@@ -17,6 +17,7 @@ enum Entry {
         } else if let index = args.firstIndex(of: "--render"), index + 1 < args.count {
             Renderer.run(outputDir: args[index + 1])
         } else {
+            WhatsNew.captureLaunchState()
             DevDashBarApp.main()
         }
     }

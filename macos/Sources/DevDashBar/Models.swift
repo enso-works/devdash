@@ -57,6 +57,64 @@ struct NodeProcess: Decodable, Sendable, Identifiable, Hashable {
     }
 }
 
+/// Any process of the current user listening on a port, plus Node processes without one (`kind == "background"`).
+struct Server: Decodable, Sendable, Identifiable, Hashable {
+    let pid: Int
+    let name: String
+    let label: String
+    let runtime: String
+    let kind: String
+    let command: String
+    let cpuPercent: Double
+    let memoryMb: Double
+    let ports: [Int]
+    let uptime: String
+    let started: Double
+    let cwd: String
+    let cwdFull: String
+    let projectRoot: String
+    let projectName: String
+    let package: String
+
+    var id: Int { pid }
+    var isBackground: Bool { kind == "background" }
+    var isService: Bool { kind == "service" }
+    var displayName: String { label.isEmpty ? name : label }
+    /// The command with paths shortened: relative to the working directory, `~` for home, and the
+    /// interpreter by name only (`node node_modules/.bin/vite` instead of two absolute paths).
+    var shortCommand: String {
+        var text = command
+        if cwdFull.count > 1 { text = text.replacingOccurrences(of: cwdFull + "/", with: "") }
+        text = text.replacingOccurrences(of: NSHomeDirectory() + "/", with: "~/")
+        let parts = text.split(separator: " ", maxSplits: 1)
+        guard let first = parts.first, first.contains("/") else { return text }
+        let name = (String(first) as NSString).lastPathComponent
+        return parts.count > 1 ? "\(name) \(parts[1])" : name
+    }
+
+    /// Name used in notifications, where there is no group header for context.
+    var reportName: String { projectName.isEmpty ? displayName : "\(projectName) \(displayName)" }
+}
+
+extension Server {
+    /// For a devdash CLI older than 0.3, which only reports Node processes.
+    init(node: NodeProcess) {
+        self.init(
+            pid: node.pid, name: node.name, label: node.displayName, runtime: "node",
+            kind: node.ports.isEmpty ? "background" : "app", command: node.command,
+            cpuPercent: node.cpuPercent, memoryMb: node.memoryMb, ports: node.ports, uptime: node.uptime,
+            started: 0, cwd: node.cwd, cwdFull: node.cwdFull, projectRoot: "", projectName: node.project, package: ""
+        )
+    }
+}
+
+/// Name and git branch of a project root that appears in the snapshot.
+struct ProjectInfo: Decodable, Sendable, Hashable {
+    let root: String
+    let name: String
+    let branch: String
+}
+
 struct DockerContainer: Decodable, Sendable, Identifiable, Hashable {
     let containerId: String
     let name: String
@@ -66,6 +124,8 @@ struct DockerContainer: Decodable, Sendable, Identifiable, Hashable {
     let created: String
     let composeProject: String
     let composeService: String
+    let projectRoot: String?
+    let projectName: String?
 
     var id: String { containerId }
     var displayName: String { composeService.isEmpty ? name : composeService }
@@ -112,6 +172,8 @@ struct ClaudeInstance: Decodable, Sendable, Identifiable, Hashable {
     let memoryMb: Double
     let uptime: String
     let cwdFull: String
+    let projectRoot: String?
+    let projectName: String?
 
     var id: Int { pid }
 }
@@ -193,6 +255,8 @@ struct Snapshot: Decodable, Sendable {
     let timestamp: Double
     let system: SystemStats
     let node: [NodeProcess]
+    let servers: [Server]?
+    let projects: [ProjectInfo]?
     let docker: [DockerContainer]
     let processes: [GeneralProcess]
     let cleanup: [CleanupSuggestion]
