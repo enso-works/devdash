@@ -21,6 +21,7 @@ from devdash import __version__
 from devdash.claude_usage import UsageTracker
 from devdash.config import Config
 from devdash.processes import (
+    _parse_host_ports_from_string,
     get_activity_heatmap_data,
     get_all_processes,
     get_all_recent_sessions,
@@ -37,6 +38,7 @@ from devdash.processes import (
     kill_process,
     stop_docker_container,
 )
+from devdash.servers import get_servers, project_infos, resolve_project
 
 CLAUDE_REFRESH_EVERY = 5  # ticks
 USAGE_REFRESH_SECONDS = 30.0
@@ -50,6 +52,13 @@ def _asdict(obj):
 
 def _expand(path: str) -> str:
     return os.path.expanduser(path) if path.startswith("~") else path
+
+
+def _with_project(d: dict, path: str) -> dict:
+    project = resolve_project(path)
+    d["project_root"] = project.root
+    d["project_name"] = project.name
+    return d
 
 
 class Bridge:
@@ -67,6 +76,7 @@ class Bridge:
         self._docker = []
         self._all_procs = []
         self._stats = None
+        self._claude_roots: set[str] = set()
         self._usage = UsageTracker() if self._has_claude else None
         self._usage_payload: dict | None = None
         self._usage_version = 0
@@ -144,18 +154,27 @@ class Bridge:
             d["cwd_full"] = _expand(p.cwd)
             node.append(d)
 
+        docker_ports = {port for c in docker for port in _parse_host_ports_from_string(c.ports)}
+        servers = get_servers({p.pid for p in node_procs}, docker_ports)
+
+        docker_dicts = [_with_project(_asdict(c), c.compose_working_dir) for c in docker]
+        claude = self._claude_payload() if self._has_claude and self._tick % CLAUDE_REFRESH_EVERY == 0 else None
+        roots = {s.project_root for s in servers} | {d["project_root"] for d in docker_dicts} | self._claude_roots
+
         snapshot = {
             "type": "snapshot",
             "timestamp": time.time(),
             "system": _asdict(stats),
             "node": node,
-            "docker": [_asdict(c) for c in docker],
+            "servers": [_asdict(s) for s in servers],
+            "projects": project_infos(roots - {""}),
+            "docker": docker_dicts,
             "processes": [_asdict(p) for p in all_procs],
             "cleanup": [_asdict(s) for s in cleanup],
         }
 
-        if self._has_claude and self._tick % CLAUDE_REFRESH_EVERY == 0:
-            snapshot["claude"] = self._claude_payload()
+        if claude is not None:
+            snapshot["claude"] = claude
         with self._state_lock:
             if self._usage_version != self._usage_sent:
                 snapshot["usage"] = self._usage_payload
@@ -168,7 +187,8 @@ class Bridge:
         for inst in get_claude_instances():
             d = _asdict(inst)
             d["cwd_full"] = _expand(inst.cwd)
-            instances.append(d)
+            instances.append(_with_project(d, d["cwd_full"]))
+        self._claude_roots = {d["project_root"] for d in instances}
         return {
             "instances": instances,
             "projects": [_asdict(p) for p in get_claude_projects()],
@@ -385,19 +405,28 @@ class DemoBridge(Bridge):
             "timestamp": time.time(),
             "system": demo.system(),
             "node": demo.node(),
-            "docker": demo.docker(),
+            "servers": demo.servers(),
+            "projects": demo.projects(),
+            # Demo paths do not exist, so the Compose working dir stands in for the resolved project.
+            "docker": [
+                {**c, "project_root": c["compose_working_dir"], "project_name": c["compose_project"]}
+                for c in demo.docker()
+            ],
             "processes": demo.processes(),
             "cleanup": demo.cleanup(),
         }
         if self._tick % CLAUDE_REFRESH_EVERY == 0:
-            snapshot["claude"] = demo.claude()
+            snapshot["claude"] = self._cmd_refresh_claude({})
             snapshot["usage"] = demo.usage()
         self._tick += 1
         return snapshot
 
     def _cmd_refresh_claude(self, cmd: dict):
         from devdash import demo
-        return demo.claude()
+        payload = demo.claude()
+        for inst in payload["instances"]:
+            inst["project_root"], inst["project_name"] = inst["cwd_full"], inst["project"]
+        return payload
 
     def _cmd_usage(self, cmd: dict):
         from devdash import demo
