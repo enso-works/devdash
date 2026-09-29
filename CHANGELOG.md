@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+- **Needs you**: cleanup suggestions, low disk space, disk space worth a look and plan limits over 80% now appear in one list at the top of the menu bar app. Dismissed items stay hidden until they change.
+- **Running tab**, replacing the Dev and Docker tabs: dev servers, containers and Claude sessions grouped by project (the git repository they run in), with the branch and a project menu (open in editor, Finder or Terminal, new Claude session, stop all). Services, servers outside a project and background Node processes are grouped at the bottom. "Group by Type" gives the previous layout.
+- Dev servers in any language: every process of yours listening on a port (Node, Bun, Deno, Python, Ruby, Go, Rust, Java, PHP and more), with a runtime badge. Local databases such as Homebrew Postgres or MySQL appear as services. GUI apps and Docker port forwarders are left out.
+- Right-click menus on every row and project header.
+- Keyboard shortcuts: Cmd+1 to Cmd+3 switch tabs, Cmd+F filters.
+- What's new after an update and a short welcome on first launch, also available from the footer menu.
+
+### Changed
+- The CPU, memory and disk tiles moved to the System tab; the header shows CPU and memory on every tab.
+- The footer has labeled Disk tree, Graph and Activity buttons, and a menu for export, the terminal UI, updates and quit.
+- Notifications cover dev servers in any language.
+
 ## 0.2.0
 
 ### Added
