@@ -221,9 +221,13 @@ def _kind(runtime: str, exe: str, ppid: int, ports: list[int], project: Project)
     return "app"
 
 
-def _excluded(exe: str) -> bool:
+def _excluded(exe: str, runtime: str) -> bool:
+    """System daemons and GUI apps. Known runtimes stay even inside a bundle: framework builds of
+    Python run from `Python.framework/.../Python.app`."""
     if not exe or exe.startswith(SYSTEM_PREFIXES):
         return True
+    if runtime != "other":
+        return False
     return bool(APP_BUNDLE.search(exe)) and not any(app in exe for app in SERVICE_APPS)
 
 
@@ -253,14 +257,14 @@ def get_servers(node_pids: set[int], docker_ports: set[int]) -> list[Server]:
                 continue
 
             exe = proc.exe()
-            if pid not in node_pids and _excluded(exe):
-                continue
-
             name = info.get("name") or ""
             cmdline = proc.cmdline()
+            runtime = _runtime(name, exe, cmdline)
+            if pid not in node_pids and _excluded(exe, runtime):
+                continue
+
             cwd = proc.cwd() or ""
             started = proc.create_time()
-            runtime = _runtime(name, exe, cmdline)
             project = resolve_project(cwd)
             try:
                 cpu = proc.cpu_percent(interval=0)
