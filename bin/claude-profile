@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# Run Claude Code with the account that owns the current folder.
+#
+# Profiles live in ~/.config/claude-profiles, one per line:
+#
+#   # name    config dir       folders that use it
+#   work      ~/.claude-work   ~/Projects
+#   personal  ~/.claude        ~/PrivateProjects ~/Clients
+#   default   personal
+#
+# The longest matching folder wins; folders nobody claims use the default.
+# The profile whose config dir is ~/.claude runs with CLAUDE_CONFIG_DIR unset,
+# because setting it explicitly switches to a different keychain entry.
+set -euo pipefail
+
+CONFIG="${CLAUDE_PROFILES_CONFIG:-$HOME/.config/claude-profiles}"
+DEFAULT_DIR="$HOME/.claude"
+
+die() { printf 'claude-profile: %s\n' "$*" >&2; exit 1; }
+
+expand() { local p="$1"; p="${p/#\~/$HOME}"; printf '%s' "${p%/}"; }
+
+# Prints "name<TAB>dir" for every profile.
+profiles() {
+    [ -f "$CONFIG" ] || die "no config at $CONFIG"
+    local name dir rest
+    while read -r name dir rest; do
+        case "$name" in ''|'#'*|default) continue ;; esac
+        printf '%s\t%s\n' "$name" "$(expand "$dir")"
+    done < "$CONFIG"
+}
+
+default_profile() {
+    local key name
+    while read -r key name _; do
+        [ "$key" = default ] && { printf '%s' "$name"; return; }
+    done < "$CONFIG"
+}
+
+profile_dir() {
+    local name dir
+    while IFS=$'\t' read -r name dir; do
+        [ "$name" = "$1" ] && { printf '%s' "$dir"; return; }
+    done < <(profiles)
+    die "unknown profile '$1'"
+}
+
+# Profile that claims a folder, or nothing when no folder rule matches.
+route() {
+    local target="$1" best="" best_len=0 name dir rest folder f
+    while read -r name dir rest; do
+        case "$name" in ''|'#'*|default) continue ;; esac
+        for folder in $rest; do
+            f="$(expand "$folder")"
+            f="$(cd "$f" 2>/dev/null && pwd -P || printf '%s' "$f")"
+            if [ "$target" = "$f" ] || [ "${target#"$f"/}" != "$target" ]; then
+                if [ "${#f}" -gt "$best_len" ]; then best="$name"; best_len="${#f}"; fi
+            fi
+        done
+    done < "$CONFIG"
+    printf '%s' "$best"
+}
+
+which_profile() {
+    local routed; routed="$(route "$1")"
+    printf '%s' "${routed:-$(default_profile)}"
+}
+
+# Profile name of the running session, from its CLAUDE_CONFIG_DIR.
+active_profile() {
+    local current="${CLAUDE_CONFIG_DIR:-$DEFAULT_DIR}" name dir
+    current="$(expand "$current")"
+    while IFS=$'\t' read -r name dir; do
+        [ "$dir" = "$current" ] && { printf '%s' "$name"; return; }
+    done < <(profiles)
+}
+
+exec_as() {
+    local name="$1" dir; shift
+    dir="$(profile_dir "$name")"
+    if [ "$dir" = "$DEFAULT_DIR" ]; then
+        exec env -u CLAUDE_CONFIG_DIR claude "$@"
+    fi
+    mkdir -p "$dir"
+    CLAUDE_CONFIG_DIR="$dir" exec claude "$@"
+}
+
+cmd_run() {
+    local here routed name
+    here="$(pwd -P)"
+    routed="$(route "$here")"
+    name="${CLAUDE_PROFILE:-${routed:-$(default_profile)}}"
+    if [ -n "$routed" ] && [ "$name" != "$routed" ] && [ -z "${CLAUDE_PROFILE_FORCE:-}" ]; then
+        die "$here belongs to '$routed', refusing to run as '$name' (set CLAUDE_PROFILE_FORCE=1 to override)"
+    fi
+    exec_as "$name" "$@"
+}
+
+cmd_status() {
+    local here name dir email
+    here="$(cd "${1:-.}" && pwd -P)"
+    name="$(which_profile "$here")"
+    dir="$(profile_dir "$name")"
+    email="$(account_email "$dir")"
+    printf 'folder   %s\nprofile  %s%s\nconfig   %s\naccount  %s\n' \
+        "$here" "$name" "$([ -z "$(route "$here")" ] && printf ' (default)')" "$dir" "${email:-not signed in}"
+}
+
+account_email() {
+    local out
+    if [ "$1" = "$DEFAULT_DIR" ]; then
+        out="$(env -u CLAUDE_CONFIG_DIR claude auth status 2>/dev/null || true)"
+    else
+        out="$(CLAUDE_CONFIG_DIR="$1" claude auth status 2>/dev/null || true)"
+    fi
+    printf '%s' "$out" | sed -n 's/.*"email": *"\([^"]*\)".*/\1/p'
+}
+
+cmd_list() {
+    local name dir
+    while IFS=$'\t' read -r name dir; do
+        printf '%-10s %-24s %s\n' "$name" "${dir/#$HOME/~}" "$(account_email "$dir" || true)"
+    done < <(profiles)
+}
+
+cmd_login() {
+    [ -n "${1:-}" ] || die "usage: claude-profile login <profile>"
+    exec_as "$1" auth login
+}
+
+# UserPromptSubmit hook: block the prompt before it reaches the wrong account.
+cmd_guard() {
+    local input cwd routed active
+    input="$(cat)"
+    cwd="$(printf '%s' "$input" | sed -n 's/.*"cwd": *"\([^"]*\)".*/\1/p' | head -1)"
+    cwd="$(cd "${cwd:-$PWD}" 2>/dev/null && pwd -P || printf '%s' "${cwd:-$PWD}")"
+    routed="$(route "$cwd")"
+    active="$(active_profile)"
+    [ -z "$routed" ] || [ -z "$active" ] || [ "$routed" = "$active" ] && exit 0
+    printf 'Blocked: %s belongs to the %s Claude account but this session runs as %s.\nNothing was sent. Quit and start it again with `claude` from that folder.\n' \
+        "$cwd" "$routed" "$active" >&2
+    exit 2
+}
+
+case "${1:-}" in
+    run) shift; cmd_run "$@" ;;
+    status) shift; cmd_status "$@" ;;
+    list) cmd_list ;;
+    login) shift; cmd_login "$@" ;;
+    which) which_profile "$(cd "${2:-.}" && pwd -P)"; echo ;;
+    guard) cmd_guard ;;
+    *) cat <<'EOF'
+usage: claude-profile <command>
+
+  run [args]       run claude as the profile that owns this folder
+  status [dir]     show the profile, config dir and account for a folder
+  list             show every profile and its signed-in account
+  login <profile>  sign a profile in to its Claude account
+  which [dir]      print the profile name for a folder
+  guard            UserPromptSubmit hook that blocks the wrong account
+
+Add `claude() { claude-profile run "$@"; }` to ~/.zshrc so plain `claude`
+picks the account. CLAUDE_PROFILE=<name> forces one in folders no rule claims.
+EOF
+    ;;
+esac
