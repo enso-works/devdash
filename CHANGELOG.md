@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Separate Claude accounts**: `bin/claude-profile` runs Claude Code with the account that owns the current folder, from `~/.config/claude-profiles`, and its `guard` hook blocks prompts sent from the wrong account.
+- The Claude tab has an account switcher for projects, sessions, cost and plan limits, and running Claude sessions show which account they use.
+
 ## 0.3.0
 
 ### Added
