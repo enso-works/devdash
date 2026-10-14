@@ -18,6 +18,7 @@ from pathlib import Path
 import psutil
 
 from devdash import __version__
+from devdash.claude_profiles import load_profiles
 from devdash.claude_usage import UsageTracker
 from devdash.config import Config
 from devdash.processes import (
@@ -71,13 +72,16 @@ class Bridge:
         self._pool = ThreadPoolExecutor(max_workers=4)
         self._idle_tracker: dict[int, float] = {}
         self._tick = 0
-        self._has_claude = (Path.home() / ".claude").is_dir()
+        self._profiles = load_profiles()
+        self._profile = self._profiles.default
+        self._has_claude = any(p.dir.is_dir() for p in self._profiles.profiles)
         self._node_procs = []
         self._docker = []
         self._all_procs = []
         self._stats = None
         self._claude_roots: set[str] = set()
-        self._usage = UsageTracker() if self._has_claude else None
+        self._usage_enabled = self._has_claude
+        self._trackers: dict[str, UsageTracker] = {}
         self._usage_payload: dict | None = None
         self._usage_version = 0
         self._usage_sent = 0
@@ -106,7 +110,7 @@ class Bridge:
         psutil.cpu_percent(interval=0)
         get_node_processes()
         threading.Thread(target=self._read_commands, daemon=True).start()
-        if self._usage is not None:
+        if self._usage_enabled:
             threading.Thread(target=self._usage_loop, daemon=True).start()
         time.sleep(0.5)
         while not self._stop.is_set():
@@ -182,18 +186,28 @@ class Bridge:
         self._tick += 1
         return snapshot
 
+    def _claude_dir(self) -> Path:
+        return self._profiles.get(self._profile).dir
+
     def _claude_payload(self) -> dict:
+        # Re-read so edits to ~/.config/claude-profiles show up without a restart.
+        self._profiles = profiles = load_profiles()
+        selected = profiles.get(self._profile)
         instances = []
         for inst in get_claude_instances():
             d = _asdict(inst)
             d["cwd_full"] = _expand(inst.cwd)
+            d["profile"] = profiles.for_config_dir(inst.config_dir) if inst.config_dir is not None else None
+            d["expected_profile"] = profiles.route(d["cwd_full"])
             instances.append(_with_project(d, d["cwd_full"]))
         self._claude_roots = {d["project_root"] for d in instances}
         return {
+            "profile": selected.name,
+            "profiles": [{"name": p.name, "email": p.email()} for p in profiles.profiles],
             "instances": instances,
-            "projects": [_asdict(p) for p in get_claude_projects()],
-            "sessions": [_asdict(s) for s in get_all_recent_sessions()],
-            "stats": _claude_stats_payload(get_claude_stats()),
+            "projects": [_asdict(p) for p in get_claude_projects(selected.dir)],
+            "sessions": [_asdict(s) for s in get_all_recent_sessions(selected.dir)],
+            "stats": _claude_stats_payload(get_claude_stats(selected.dir)),
         }
 
     # -- usage ---------------------------------------------------------------
@@ -204,12 +218,21 @@ class Bridge:
             self._refresh_usage()
             self._stop.wait(USAGE_REFRESH_SECONDS)
 
+    def _tracker(self) -> UsageTracker:
+        profile = self._profiles.get(self._profile)
+        tracker = self._trackers.get(profile.name)
+        if tracker is None or tracker.profile != profile:
+            tracker = self._trackers[profile.name] = UsageTracker(profile)
+        return tracker
+
     def _refresh_usage(self, force_limits: bool = False) -> dict | None:
         try:
-            payload = self._usage.payload(force_limits=force_limits)
+            payload = self._tracker().payload(force_limits=force_limits)
         except Exception as e:
             self.emit({"type": "error", "message": f"usage failed: {e}"})
             return None
+        if payload["profile"] != self._profile:
+            return None  # the selection changed while this was computing
         with self._state_lock:
             self._usage_payload = payload
             self._usage_version += 1
@@ -255,9 +278,19 @@ class Bridge:
         return self._claude_payload()
 
     def _cmd_usage(self, cmd: dict):
-        if self._usage is None:
+        if not self._usage_enabled:
             return None
         return self._refresh_usage(force_limits=bool(cmd.get("force")))
+
+    def _cmd_claude_profile(self, cmd: dict):
+        """Switches which profile's projects, sessions and usage the Claude views show."""
+        name = str(cmd["name"])
+        if name not in {p.name for p in self._profiles.profiles}:
+            raise RuntimeError(f"Unknown Claude profile {name}")
+        self._profile = name
+        if self._usage_enabled:
+            self._pool.submit(self._refresh_usage)
+        return self._claude_payload() if self._has_claude else None
 
     def _cmd_kill(self, cmd: dict):
         pid = int(cmd["pid"])
@@ -301,16 +334,16 @@ class Bridge:
         return {"owners": [_asdict(o) for o in owners], "edges": [_asdict(e) for e in edges]}
 
     def _cmd_heatmap(self, cmd: dict):
-        return _asdict(get_activity_heatmap_data())
+        return _asdict(get_activity_heatmap_data(self._claude_dir()))
 
     def _cmd_project_detail(self, cmd: dict):
-        detail = _asdict(get_project_detail(str(cmd["path"])))
+        detail = _asdict(get_project_detail(str(cmd["path"]), self._claude_dir()))
         detail["tools_used"] = _ranked(detail["tools_used"])
         detail["languages"] = _ranked(detail["languages"])
         return detail
 
     def _cmd_project_sessions(self, cmd: dict):
-        return [_asdict(s) for s in get_project_sessions(str(cmd["path"]))]
+        return [_asdict(s) for s in get_project_sessions(str(cmd["path"]), self._claude_dir())]
 
     def _cmd_export(self, cmd: dict):
         with self._state_lock:
@@ -395,7 +428,8 @@ class DemoBridge(Bridge):
     def __init__(self, config: Config) -> None:
         super().__init__(config)
         self._has_claude = True
-        self._usage = None
+        self._usage_enabled = False
+        self._profile = "personal"
 
     def _snapshot(self) -> dict:
         from devdash import demo
@@ -423,7 +457,7 @@ class DemoBridge(Bridge):
 
     def _cmd_refresh_claude(self, cmd: dict):
         from devdash import demo
-        payload = demo.claude()
+        payload = demo.claude(self._profile)
         for inst in payload["instances"]:
             inst["project_root"], inst["project_name"] = inst["cwd_full"], inst["project"]
         return payload
@@ -431,6 +465,10 @@ class DemoBridge(Bridge):
     def _cmd_usage(self, cmd: dict):
         from devdash import demo
         return demo.usage()
+
+    def _cmd_claude_profile(self, cmd: dict):
+        self._profile = str(cmd["name"])
+        return self._cmd_refresh_claude(cmd)
 
     def _cmd_kill(self, cmd: dict):
         return {"pid": int(cmd["pid"])}
