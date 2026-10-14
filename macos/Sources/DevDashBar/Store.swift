@@ -63,6 +63,7 @@ enum SettingsKey {
     static let tab = "selectedTab"
     static let grouping = "runningGrouping"
     static let toggledGroups = "toggledRunningGroups"
+    static let claudeProfile = "claudeProfile"
 }
 
 @MainActor
@@ -121,6 +122,16 @@ final class Store {
     var appServers: [Server] { servers.filter { $0.kind == "app" } }
     var activeCount: Int { appServers.count + docker.count }
     var claudeInstances: [ClaudeInstance] { claude?.instances ?? [] }
+    var claudeProfiles: [ClaudeProfile] { claude?.profiles ?? [] }
+    /// The picked profile while the bridge switches, then the one it actually serves.
+    var selectedClaudeProfile: String? {
+        if let claudeProfile, claudeProfiles.contains(where: { $0.name == claudeProfile }) { return claudeProfile }
+        return claude?.profile
+    }
+    /// Profile the Claude tab shows; nil until the user picks one, which means the configured default.
+    private(set) var claudeProfile = UserDefaults.standard.string(forKey: SettingsKey.claudeProfile) {
+        didSet { UserDefaults.standard.set(claudeProfile, forKey: SettingsKey.claudeProfile) }
+    }
     var isUnderPressure: Bool {
         guard let system else { return false }
         return system.cpuPercent >= config.colorThresholdHigh || system.memoryPercent >= config.colorThresholdHigh
@@ -174,6 +185,7 @@ final class Store {
             self.hello = hello
             connection = .connected
             restartDelay = 1
+            if hello.hasClaude, let claudeProfile { sendClaudeProfile(claudeProfile) }
         case .snapshot(let snapshot):
             apply(snapshot)
         case .error(let message):
@@ -192,7 +204,7 @@ final class Store {
         docker = snapshot.docker
         processes = snapshot.processes
         cleanup = snapshot.cleanup
-        if let usage = snapshot.usage {
+        if let usage = snapshot.usage, isCurrentProfile(usage.profile) {
             self.usage = usage
         }
         if let claude = snapshot.claude {
@@ -225,13 +237,35 @@ final class Store {
         }
     }
 
+    /// Shows another profile's projects, sessions and usage in the Claude tab.
+    func selectClaudeProfile(_ name: String) {
+        guard name != selectedClaudeProfile else { return }
+        claudeProfile = name
+        usage = nil
+        sendClaudeProfile(name)
+    }
+
+    private func sendClaudeProfile(_ name: String) {
+        Task {
+            guard let payload = try? await bridge.request("claude_profile", ["name": name], as: ClaudePayload?.self) else { return }
+            claude = payload
+            lastClaudeUpdate = .now
+        }
+    }
+
+    private func isCurrentProfile(_ profile: String?) -> Bool {
+        guard let profile, let current = selectedClaudeProfile ?? claudeProfile else { return true }
+        return profile == current
+    }
+
     /// Re-reads transcripts now; `force` also re-fetches plan limits instead of using the cached ones.
     func refreshUsage(force: Bool = false) {
         guard hasClaude, !pending.contains("usage") else { return }
         pending.insert("usage")
         Task {
             defer { pending.remove("usage") }
-            if let payload = try? await bridge.request("usage", ["force": force], as: ClaudeUsage?.self) {
+            if let payload = try? await bridge.request("usage", ["force": force], as: ClaudeUsage?.self),
+               isCurrentProfile(payload.profile) {
                 usage = payload
             }
         }

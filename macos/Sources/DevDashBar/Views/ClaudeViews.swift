@@ -14,6 +14,11 @@ struct ClaudeTab: View {
 
     var body: some View {
         if let claude = store.claude {
+            if let profiles = claude.profiles, profiles.count > 1 {
+                ProfileSwitcher(profiles: profiles, selected: store.selectedClaudeProfile ?? "")
+                    .padding(.horizontal, 4)
+                    .padding(.top, 10)
+            }
             if let usage = store.usage {
                 UsageCard(usage: usage)
                     .padding(.horizontal, 4)
@@ -88,6 +93,51 @@ struct ClaudeTab: View {
     }
 }
 
+private struct ProfileSwitcher: View {
+    @Environment(Store.self) private var store
+    let profiles: [ClaudeProfile]
+    let selected: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Picker("Account", selection: Binding(get: { selected }, set: { store.selectClaudeProfile($0) })) {
+                ForEach(profiles) { Text($0.name.capitalized).tag($0.name) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .fixedSize()
+            Spacer(minLength: 0)
+            Text(profiles.first { $0.name == selected }?.email ?? "Not signed in")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+}
+
+/// The account a running session uses, orange when its folder belongs to another one.
+struct ProfileTag: View {
+    let instance: ClaudeInstance
+
+    var body: some View {
+        if let profile = instance.profile {
+            let warning = instance.isWrongAccount
+            let tint = warning ? Color.orange : Color.secondary
+            HStack(spacing: 3) {
+                if warning { Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8)) }
+                Text(profile).font(.system(size: 9.5, weight: .semibold))
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .foregroundStyle(tint)
+            .background(Capsule().fill(tint.opacity(warning ? 0.16 : 0.1)))
+            .help(warning ? "Runs on the \(profile) account, but this folder belongs to \(instance.expectedProfile ?? "")" : "Runs on the \(profile) account")
+        }
+    }
+}
+
 private struct StatsCard: View {
     @Environment(Store.self) private var store
     let stats: ClaudeStats
@@ -150,6 +200,7 @@ struct ClaudeInstanceRow: View {
                         Text(inGroup ? "Claude session" : (instance.project.isEmpty ? "claude" : instance.project))
                             .font(.system(size: 12.5, weight: .semibold))
                             .lineLimit(1)
+                        if store.claudeProfiles.count > 1 { ProfileTag(instance: instance) }
                     }
                     Text(inGroup ? "\(instance.tty)  ·  up \(instance.uptime)" : "\(instance.cwd)  ·  \(instance.tty)  ·  up \(instance.uptime)")
                         .font(.system(size: inGroup ? 10.5 : 10))
