@@ -199,6 +199,16 @@ enum Launcher {
         runInTerminal("claude --resume \(shellQuote(session))", in: path)
     }
 
+    /// Signs a Claude profile in. `env` skips any `claude` shell function, which would pick the account by folder.
+    static func signInClaude(_ profile: ClaudeProfile) {
+        let env = if profile.defaultDir ?? true || profile.dir == nil {
+            "env -u CLAUDE_CONFIG_DIR"
+        } else {
+            "env CLAUDE_CONFIG_DIR=\(shellQuote(profile.dir!))"
+        }
+        runInTerminal("\(env) claude auth login", in: NSHomeDirectory())
+    }
+
     static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }

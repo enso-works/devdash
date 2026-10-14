@@ -203,7 +203,10 @@ class Bridge:
         self._claude_roots = {d["project_root"] for d in instances}
         return {
             "profile": selected.name,
-            "profiles": [{"name": p.name, "email": p.email()} for p in profiles.profiles],
+            "profiles": [
+                {"name": p.name, "email": p.email(), "dir": str(p.dir), "default_dir": p.is_default_dir}
+                for p in profiles.profiles
+            ],
             "instances": instances,
             "projects": [_asdict(p) for p in get_claude_projects(selected.dir)],
             "sessions": [_asdict(s) for s in get_all_recent_sessions(selected.dir)],

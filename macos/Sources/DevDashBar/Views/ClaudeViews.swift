@@ -108,11 +108,20 @@ private struct ProfileSwitcher: View {
             .controlSize(.small)
             .fixedSize()
             Spacer(minLength: 0)
-            Text(profiles.first { $0.name == selected }?.email ?? "Not signed in")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            if let profile = profiles.first(where: { $0.name == selected }) {
+                if let email = profile.email {
+                    Text(email)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    PillButton(title: "Sign in", symbol: "person.crop.circle.badge.plus", prominent: true) {
+                        Launcher.signInClaude(profile)
+                    }
+                    .help("Opens Terminal to sign the \(profile.name) profile in. Sign claude.ai in to the right account in your browser first.")
+                }
+            }
         }
     }
 }

@@ -21,6 +21,7 @@ from pathlib import Path
 from devdash.claude_profiles import ClaudeProfile, load_profiles
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+NOT_SIGNED_IN = "Not signed in to Claude Code"
 LIMITS_TTL = 120.0  # seconds between plan-limit requests
 
 CACHE_WRITE_5M = 1.25
@@ -323,7 +324,7 @@ def fetch_plan_limits(profile: ClaudeProfile) -> dict:
     """Returns {"plan", "limits", "extra_usage", "error"}; never raises."""
     creds = _read_credentials(profile)
     if not creds or not creds.get("accessToken"):
-        return {"plan": None, "limits": [], "extra_usage": None, "error": "Not signed in to Claude Code"}
+        return {"plan": None, "limits": [], "extra_usage": None, "error": NOT_SIGNED_IN}
 
     plan = _plan_label(creds.get("subscriptionType"), creds.get("rateLimitTier"))
     expires_at = creds.get("expiresAt")
@@ -389,7 +390,9 @@ class UsageTracker:
 
     def payload(self, force_limits: bool = False) -> dict:
         with self._lock:
-            if force_limits or self._limits is None or time.time() - self._limits_at > LIMITS_TTL:
+            # A missing login is re-checked every time, so signing in shows up on the next refresh.
+            stale = self._limits is None or self._limits["error"] == NOT_SIGNED_IN or time.time() - self._limits_at > LIMITS_TTL
+            if force_limits or stale:
                 self._limits = fetch_plan_limits(self.profile)
                 self._limits_at = time.time()
             limits = self._limits

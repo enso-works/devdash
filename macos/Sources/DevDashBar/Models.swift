@@ -255,6 +255,9 @@ struct ClaudeStats: Decodable, Sendable {
 struct ClaudeProfile: Decodable, Sendable, Identifiable, Hashable {
     let name: String
     let email: String?
+    let dir: String?
+    /// ~/.claude, which Claude Code uses when CLAUDE_CONFIG_DIR is unset.
+    let defaultDir: Bool?
 
     var id: String { name }
 }
