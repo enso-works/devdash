@@ -6,7 +6,9 @@ Reads the same ~/.config/claude-profiles as bin/claude-profile:
     work      ~/.claude-work   ~/Projects
     personal  ~/.claude        ~/PrivateProjects
     default   personal
+    github    work             your-work-login
 
+A `github` line names the GitHub account a profile's folders use with `gh` (bin/claude-profile gh).
 Without that file there is one profile, ~/.claude.
 """
 from __future__ import annotations
@@ -35,6 +37,8 @@ class ClaudeProfile:
     name: str
     dir: Path
     folders: tuple[Path, ...] = ()
+    # GitHub login its folders use with gh, from its `github` line
+    github: str | None = None
 
     @property
     def is_default_dir(self) -> bool:
@@ -91,19 +95,23 @@ class Profiles:
 def load_profiles() -> Profiles:
     profiles: list[ClaudeProfile] = []
     default = None
+    github: dict[str, str] = {}
     try:
         lines = _config_path().read_text(encoding="utf-8").splitlines()
     except OSError:
         lines = []
-    for line in lines:
-        parts = line.split()
-        if not parts or parts[0].startswith("#"):
+    rows = [line.split() for line in lines]
+    for parts in rows:
+        if parts and parts[0] == "github" and len(parts) > 2:
+            github[parts[1]] = parts[2]
+    for parts in rows:
+        if not parts or parts[0].startswith("#") or parts[0] == "github":
             continue
         if parts[0] == "default" and len(parts) > 1:
             default = parts[1]
         elif len(parts) >= 2:
             folders = tuple(_resolve(_expand(f)) for f in parts[2:])
-            profiles.append(ClaudeProfile(parts[0], _expand(parts[1]), folders))
+            profiles.append(ClaudeProfile(parts[0], _expand(parts[1]), folders, github.get(parts[0])))
     if not profiles:
         profiles = [ClaudeProfile("default", DEFAULT_DIR)]
     names = [p.name for p in profiles]
@@ -115,3 +123,4 @@ def _resolve(path: Path) -> Path:
         return path.resolve()
     except OSError:
         return path
+
