@@ -160,6 +160,25 @@ claude-profile list         # every profile and its account
 - The profile at `~/.claude` runs with `CLAUDE_CONFIG_DIR` unset, because Claude Code stores the login under a different keychain entry whenever that variable is set.
 - In the menu bar app, the Claude tab gets an account switcher for projects, sessions, cost and plan limits. Running sessions show their account, and turn orange when it doesn't match their folder.
 
+#### GitHub accounts per folder
+
+The same folders can pick the `gh` account. Sign each GitHub account in to `gh` once (`gh auth login --hostname github.com --web`; `gh` keeps several logins per host), name each profile's login in the config, and route `gh` through `claude-profile`:
+
+```
+# ~/.config/claude-profiles
+github    work             your-work-login
+github    personal         your-private-login
+```
+
+```sh
+echo 'gh() { claude-profile gh "$@"; }' >> ~/.zshrc
+```
+
+- Plain `gh` runs with the login of the profile that owns the folder (as `GH_TOKEN`, from `gh auth token --user`). Without a `github` line it's plain `gh`, and so is `gh auth`, which can't store or switch logins while `GH_TOKEN` is set. An explicit `GH_TOKEN` wins.
+- If the folder's login isn't signed in to `gh`, the command stops with how to sign it in, rather than running as the other account.
+- `claude-profile status` and `list` show the GitHub login; the menu bar app shows it under each profile's Claude account, or a "Sign in to GitHub" button.
+- Git pushes don't go through `gh`: give each account its own SSH key and host alias for that.
+
 ### How it works
 
 The app is a small SwiftUI program that runs `devdash --serve` in the background. Release builds run the copy of devdash bundled inside the app. Local builds use the CLI from your checkout or `PATH`. That process sends a JSON snapshot every few seconds and accepts commands (kill, stop, details, usage and so on) over stdin/stdout, so the terminal UI and the app share the same data code. If the CLI is missing or too old, the app shows the command to fix it and can run it in Terminal.
