@@ -18,7 +18,7 @@ from pathlib import Path
 import psutil
 
 from devdash import __version__
-from devdash.claude_profiles import load_profiles
+from devdash.claude_profiles import github_signed_in, load_profiles
 from devdash.claude_usage import UsageTracker
 from devdash.config import Config
 from devdash.processes import (
@@ -204,7 +204,14 @@ class Bridge:
         return {
             "profile": selected.name,
             "profiles": [
-                {"name": p.name, "email": p.email(), "dir": str(p.dir), "default_dir": p.is_default_dir}
+                {
+                    "name": p.name,
+                    "email": p.email(),
+                    "dir": str(p.dir),
+                    "default_dir": p.is_default_dir,
+                    "github": p.github,
+                    "github_signed_in": github_signed_in(p.github),
+                }
                 for p in profiles.profiles
             ],
             "instances": instances,

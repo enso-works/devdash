@@ -109,19 +109,47 @@ private struct ProfileSwitcher: View {
             .fixedSize()
             Spacer(minLength: 0)
             if let profile = profiles.first(where: { $0.name == selected }) {
-                if let email = profile.email {
-                    Text(email)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                } else {
-                    PillButton(title: "Sign in", symbol: "person.crop.circle.badge.plus", prominent: true) {
-                        Launcher.signInClaude(profile)
+                VStack(alignment: .trailing, spacing: 3) {
+                    if let email = profile.email {
+                        Text(email)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        PillButton(title: "Sign in", symbol: "person.crop.circle.badge.plus", prominent: true) {
+                            Launcher.signInClaude(profile)
+                        }
+                        .help("Opens Terminal to sign the \(profile.name) profile in. Sign claude.ai in to the right account in your browser first.")
                     }
-                    .help("Opens Terminal to sign the \(profile.name) profile in. Sign claude.ai in to the right account in your browser first.")
+                    if let login = profile.github {
+                        GitHubLogin(profile: profile.name, login: login, signedIn: profile.githubSignedIn)
+                    }
                 }
             }
+        }
+    }
+}
+
+/// The GitHub account the profile's folders use with gh, or a sign-in button when gh has no login for it.
+private struct GitHubLogin: View {
+    let profile: String
+    let login: String
+    let signedIn: Bool?
+
+    var body: some View {
+        if signedIn == false {
+            PillButton(title: "Sign in to GitHub", symbol: "person.badge.key") {
+                Launcher.signInGitHub()
+            }
+            .help("Opens Terminal to sign gh in to \(login), the \(profile) profile's GitHub account. Sign github.com in to it in your browser first.")
+        } else {
+            Text("GitHub · \(login)")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help("gh runs as \(login) in the \(profile) profile's folders")
         }
     }
 }

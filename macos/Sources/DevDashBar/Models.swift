@@ -258,6 +258,10 @@ struct ClaudeProfile: Decodable, Sendable, Identifiable, Hashable {
     let dir: String?
     /// ~/.claude, which Claude Code uses when CLAUDE_CONFIG_DIR is unset.
     let defaultDir: Bool?
+    /// GitHub login the profile's folders use with gh (its `github` line in ~/.config/claude-profiles).
+    let github: String?
+    /// Whether gh holds a login for it; nil without a GitHub login or gh.
+    let githubSignedIn: Bool?
 
     var id: String { name }
 }

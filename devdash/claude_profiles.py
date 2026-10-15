@@ -16,6 +16,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+import subprocess
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -124,3 +127,41 @@ def _resolve(path: Path) -> Path:
     except OSError:
         return path
 
+
+# --- GitHub logins -----------------------------------------------------------------------------------------------
+
+GH_CHECK_SECONDS = 60
+_gh_checked: dict[str, tuple[float, bool]] = {}
+
+
+def _gh_binary() -> str | None:
+    # The menu bar app's bridge may not have Homebrew on its PATH
+    return shutil.which("gh") or next(
+        (p for p in ("/opt/homebrew/bin/gh", "/usr/local/bin/gh") if os.access(p, os.X_OK)), None
+    )
+
+
+def github_signed_in(login: str | None) -> bool | None:
+    """Whether gh holds a login for this GitHub account; None without an account or gh. Checked once a minute."""
+    if not login:
+        return None
+    gh = _gh_binary()
+    if not gh:
+        return None
+    now = time.monotonic()
+    cached = _gh_checked.get(login)
+    if cached and now - cached[0] < GH_CHECK_SECONDS:
+        return cached[1]
+    try:
+        # the token itself is discarded: only whether gh has one counts
+        result = subprocess.run(
+            [gh, "auth", "token", "--hostname", "github.com", "--user", login],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        signed_in = result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        signed_in = False
+    _gh_checked[login] = (now, signed_in)
+    return signed_in

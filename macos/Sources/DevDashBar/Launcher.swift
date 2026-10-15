@@ -209,6 +209,11 @@ enum Launcher {
         runInTerminal("\(env) claude auth login", in: NSHomeDirectory())
     }
 
+    /// gh's own login; `gh auth` runs without the profile's token (claude-profile gh passes it through).
+    static func signInGitHub() {
+        runInTerminal("gh auth login --hostname github.com --git-protocol ssh --web", in: NSHomeDirectory())
+    }
+
     static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }

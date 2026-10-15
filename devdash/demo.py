@@ -168,7 +168,10 @@ def claude(profile: str = "personal") -> dict:
     today = date.today()
     return {
         "profile": profile,
-        "profiles": [{"name": "personal", "email": "alex@example.com"}, {"name": "work", "email": "alex@acme.dev"}],
+        "profiles": [
+            {"name": "personal", "email": "alex@example.com", "github": "alex", "github_signed_in": True},
+            {"name": "work", "email": "alex@acme.dev", "github": "alex_acme", "github_signed_in": False},
+        ],
         "instances": [
             {"pid": 71002, "project": "storefront", "cwd": "~/code/storefront", "tty": "/dev/ttys004",
              "cpu_percent": round(_wave(8, 6), 1), "memory_mb": 356.0, "uptime": "1h 02m", "cwd_full": f"{HOME}/code/storefront",
