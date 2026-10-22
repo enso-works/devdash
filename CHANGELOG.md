@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Separate Claude accounts**: `bin/claude-profile` runs Claude Code with the account that owns the current folder, from `~/.config/claude-profiles`, and its `guard` hook blocks prompts sent from the wrong account.
+- The Claude tab has an account switcher for projects, sessions, cost and plan limits, and running Claude sessions show which account they use.
+- **GitHub accounts per folder**: `claude-profile gh` runs `gh` as the GitHub login a profile names in a `github` line of `~/.config/claude-profiles`; the account switcher shows each profile's login, or a "Sign in to GitHub" button.
+
 ## 0.3.0
 
 ### Added

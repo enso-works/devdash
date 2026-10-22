@@ -18,9 +18,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-CLAUDE_DIR = Path.home() / ".claude"
-PROJECTS_DIR = CLAUDE_DIR / "projects"
+from devdash.claude_profiles import ClaudeProfile, load_profiles
+
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+NOT_SIGNED_IN = "Not signed in to Claude Code"
 LIMITS_TTL = 120.0  # seconds between plan-limit requests
 
 CACHE_WRITE_5M = 1.25
@@ -158,7 +159,7 @@ def _parse_line(line: bytes) -> tuple[str, UsageEntry] | None:
 class TranscriptIndex:
     """Parses transcripts once and re-reads only files whose size or mtime changed."""
 
-    def __init__(self, root: Path = PROJECTS_DIR) -> None:
+    def __init__(self, root: Path) -> None:
         self._root = root
         self._files: dict[str, tuple[int, float, dict[str, UsageEntry]]] = {}
 
@@ -267,13 +268,13 @@ def summarize(entries: list[UsageEntry], session_start: float | None = None, now
 # -- Plan limits --------------------------------------------------------------
 
 
-def _read_credentials() -> dict | None:
+def _read_credentials(profile: ClaudeProfile) -> dict | None:
     """Claude Code keeps its OAuth credentials in the macOS keychain, or a file elsewhere."""
     raw = None
     if sys.platform == "darwin":
         try:
             result = subprocess.run(
-                ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                ["security", "find-generic-password", "-s", profile.keychain_service, "-w"],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
@@ -281,7 +282,7 @@ def _read_credentials() -> dict | None:
         except (OSError, subprocess.TimeoutExpired):
             pass
     if raw is None:
-        path = CLAUDE_DIR / ".credentials.json"
+        path = profile.dir / ".credentials.json"
         if path.is_file():
             try:
                 raw = path.read_text(encoding="utf-8")
@@ -319,11 +320,11 @@ def _limit_label(limit: dict) -> str:
     return (name or kind.replace("_", " ")).capitalize()
 
 
-def fetch_plan_limits() -> dict:
+def fetch_plan_limits(profile: ClaudeProfile) -> dict:
     """Returns {"plan", "limits", "extra_usage", "error"}; never raises."""
-    creds = _read_credentials()
+    creds = _read_credentials(profile)
     if not creds or not creds.get("accessToken"):
-        return {"plan": None, "limits": [], "extra_usage": None, "error": "Not signed in to Claude Code"}
+        return {"plan": None, "limits": [], "extra_usage": None, "error": NOT_SIGNED_IN}
 
     plan = _plan_label(creds.get("subscriptionType"), creds.get("rateLimitTier"))
     expires_at = creds.get("expiresAt")
@@ -380,16 +381,19 @@ def fetch_plan_limits() -> dict:
 class UsageTracker:
     """Thread-safe usage state: incremental transcript index plus throttled limit fetches."""
 
-    def __init__(self) -> None:
-        self._index = TranscriptIndex()
+    def __init__(self, profile: ClaudeProfile) -> None:
+        self.profile = profile
+        self._index = TranscriptIndex(profile.dir / "projects")
         self._lock = threading.Lock()
         self._limits: dict | None = None
         self._limits_at = 0.0
 
     def payload(self, force_limits: bool = False) -> dict:
         with self._lock:
-            if force_limits or self._limits is None or time.time() - self._limits_at > LIMITS_TTL:
-                self._limits = fetch_plan_limits()
+            # A missing login is re-checked every time, so signing in shows up on the next refresh.
+            stale = self._limits is None or self._limits["error"] == NOT_SIGNED_IN or time.time() - self._limits_at > LIMITS_TTL
+            if force_limits or stale:
+                self._limits = fetch_plan_limits(self.profile)
                 self._limits_at = time.time()
             limits = self._limits
             entries = self._index.entries()
@@ -400,6 +404,7 @@ class UsageTracker:
                 session_start = limit["resets_at"] - 5 * 3600
                 break
         return {
+            "profile": self.profile.name,
             **limits,
             "limits_updated": self._limits_at,
             **summarize(entries, session_start=session_start),
@@ -408,5 +413,6 @@ class UsageTracker:
 
 if __name__ == "__main__":
     started = time.time()
-    print(json.dumps(UsageTracker().payload(), indent=2, default=str))
+    profiles = load_profiles()
+    print(json.dumps(UsageTracker(profiles.get(profiles.default)).payload(), indent=2, default=str))
     print(f"took {time.time() - started:.2f}s", file=sys.stderr)

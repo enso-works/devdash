@@ -86,6 +86,13 @@ enum SelfTest {
             let c = try await bridge.request("refresh_claude", as: ClaudePayload?.self)
             return "instances=\(c?.instances.count ?? 0) projects=\(c?.projects.count ?? 0) sessions=\(c?.sessions.count ?? 0) stats=\(c?.stats != nil)"
         }
+        if let claude = (try? await bridge.request("refresh_claude", as: ClaudePayload?.self)) ?? nil,
+           let current = claude.profile {
+            await step("claude_profile") {
+                let c = try await bridge.request("claude_profile", ["name": current], as: ClaudePayload?.self)
+                return "profile=\(c?.profile ?? "-") of \(claude.profiles?.map(\.name).joined(separator: ",") ?? "-")"
+            }
+        }
         if let project = (try? await bridge.request("refresh_claude", as: ClaudePayload?.self))??.projects.first {
             await step("project_detail") {
                 let d = try await bridge.request("project_detail", ["path": project.path], as: ProjectDetail.self)

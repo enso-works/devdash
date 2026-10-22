@@ -10,6 +10,8 @@ from pathlib import Path
 
 import psutil
 
+CLAUDE_HOME = Path.home() / ".claude"
+
 _project_name_cache: dict[str, str] = {}
 
 
@@ -480,11 +482,10 @@ class ActivityHeatmapData:
     total_hours: float
 
 
-def get_activity_heatmap_data() -> ActivityHeatmapData | None:
+def get_activity_heatmap_data(claude_dir: Path = CLAUDE_HOME) -> ActivityHeatmapData | None:
     """Build activity heatmap from Claude stats and session data."""
     from datetime import timedelta
 
-    claude_dir = Path.home() / ".claude"
     projects_dir = claude_dir / "projects"
     stats_file = claude_dir / "stats-cache.json"
 
@@ -776,6 +777,7 @@ class ClaudeInstance:
     cpu_percent: float
     memory_mb: float
     uptime: str
+    config_dir: str | None = None  # CLAUDE_CONFIG_DIR: "" when unset, None when the environment is unreadable
 
 
 @dataclass
@@ -845,6 +847,12 @@ def get_claude_instances() -> list[ClaudeInstance]:
 
             project = Path(cwd).name if cwd else ""
 
+            try:
+                env = proc.environ()
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                env = {}
+            config_dir = env.get("CLAUDE_CONFIG_DIR", "") if env else None
+
             results.append(ClaudeInstance(
                 pid=pid,
                 project=project,
@@ -853,6 +861,7 @@ def get_claude_instances() -> list[ClaudeInstance]:
                 cpu_percent=cpu,
                 memory_mb=mem,
                 uptime=_format_uptime(uptime),
+                config_dir=config_dir,
             ))
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
@@ -861,8 +870,7 @@ def get_claude_instances() -> list[ClaudeInstance]:
     return results
 
 
-def get_claude_projects() -> list[ClaudeProject]:
-    claude_dir = Path.home() / ".claude"
+def get_claude_projects(claude_dir: Path = CLAUDE_HOME) -> list[ClaudeProject]:
     history_file = claude_dir / "history.jsonl"
     projects_dir = claude_dir / "projects"
 
@@ -994,8 +1002,8 @@ def _format_iso_sortable(iso: str) -> str:
         return iso[:16] if iso else ""
 
 
-def get_claude_stats() -> ClaudeStats | None:
-    stats_file = Path.home() / ".claude" / "stats-cache.json"
+def get_claude_stats(claude_dir: Path = CLAUDE_HOME) -> ClaudeStats | None:
+    stats_file = claude_dir / "stats-cache.json"
     if not stats_file.is_file():
         return None
     try:
@@ -1029,9 +1037,9 @@ def get_claude_stats() -> ClaudeStats | None:
     )
 
 
-def get_project_sessions(project_path: str) -> list[ClaudeSessionEntry]:
+def get_project_sessions(project_path: str, claude_dir: Path = CLAUDE_HOME) -> list[ClaudeSessionEntry]:
     encoded = project_path.replace("/", "-")
-    index_file = Path.home() / ".claude" / "projects" / encoded / "sessions-index.json"
+    index_file = claude_dir / "projects" / encoded / "sessions-index.json"
     if not index_file.is_file():
         return []
     try:
@@ -1057,9 +1065,9 @@ def get_project_sessions(project_path: str) -> list[ClaudeSessionEntry]:
     return entries
 
 
-def get_all_recent_sessions() -> list[ClaudeSessionEntry]:
+def get_all_recent_sessions(claude_dir: Path = CLAUDE_HOME) -> list[ClaudeSessionEntry]:
     """Return the 50 most recent sessions across all projects."""
-    projects_dir = Path.home() / ".claude" / "projects"
+    projects_dir = claude_dir / "projects"
     if not projects_dir.is_dir():
         return []
 
@@ -1090,11 +1098,11 @@ def get_all_recent_sessions() -> list[ClaudeSessionEntry]:
     return [entry for _, entry in raw_entries[:50]]
 
 
-def get_project_detail(project_path: str) -> ClaudeProjectDetail:
+def get_project_detail(project_path: str, claude_dir: Path = CLAUDE_HOME) -> ClaudeProjectDetail:
     name = Path(project_path).name
 
     # Aggregate session-meta files for this project
-    meta_dir = Path.home() / ".claude" / "usage-data" / "session-meta"
+    meta_dir = claude_dir / "usage-data" / "session-meta"
     total_messages = 0
     total_lines_added = 0
     total_lines_removed = 0
@@ -1127,7 +1135,7 @@ def get_project_detail(project_path: str) -> ClaudeProjectDetail:
 
     # Read MEMORY.md
     encoded = project_path.replace("/", "-")
-    memory_file = Path.home() / ".claude" / "projects" / encoded / "memory" / "MEMORY.md"
+    memory_file = claude_dir / "projects" / encoded / "memory" / "MEMORY.md"
     memory_content = None
     if memory_file.is_file():
         try:
@@ -1136,7 +1144,7 @@ def get_project_detail(project_path: str) -> ClaudeProjectDetail:
             pass
 
     # Get recent sessions
-    recent_sessions = get_project_sessions(project_path)[:10]
+    recent_sessions = get_project_sessions(project_path, claude_dir)[:10]
 
     return ClaudeProjectDetail(
         project_path=project_path,

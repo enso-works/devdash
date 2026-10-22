@@ -174,8 +174,16 @@ struct ClaudeInstance: Decodable, Sendable, Identifiable, Hashable {
     let cwdFull: String
     let projectRoot: String?
     let projectName: String?
+    /// Claude profile the session runs as, nil when its environment is unreadable.
+    let profile: String?
+    /// Profile that claims the session's folder in ~/.config/claude-profiles.
+    let expectedProfile: String?
 
     var id: Int { pid }
+    var isWrongAccount: Bool {
+        guard let profile, let expectedProfile else { return false }
+        return profile != expectedProfile
+    }
 }
 
 struct ClaudeProject: Decodable, Sendable, Identifiable, Hashable {
@@ -244,7 +252,24 @@ struct ClaudeStats: Decodable, Sendable {
     let hourCounts: [Int]
 }
 
+struct ClaudeProfile: Decodable, Sendable, Identifiable, Hashable {
+    let name: String
+    let email: String?
+    let dir: String?
+    /// ~/.claude, which Claude Code uses when CLAUDE_CONFIG_DIR is unset.
+    let defaultDir: Bool?
+    /// GitHub login the profile's folders use with gh (its `github` line in ~/.config/claude-profiles).
+    let github: String?
+    /// Whether gh holds a login for it; nil without a GitHub login or gh.
+    let githubSignedIn: Bool?
+
+    var id: String { name }
+}
+
 struct ClaudePayload: Decodable, Sendable {
+    /// Profile whose projects, sessions and stats this payload holds.
+    let profile: String?
+    let profiles: [ClaudeProfile]?
     let instances: [ClaudeInstance]
     let projects: [ClaudeProject]
     let sessions: [ClaudeSession]
@@ -400,6 +425,7 @@ struct ExtraUsage: Decodable, Sendable {
 }
 
 struct ClaudeUsage: Decodable, Sendable {
+    let profile: String?
     let plan: String?
     let limits: [PlanLimit]
     let extraUsage: ExtraUsage?

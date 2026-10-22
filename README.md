@@ -132,6 +132,53 @@ The Claude tab has a usage card, and tapping it opens a detail page.
 
 Everything is computed locally. The only network request is the plan-limits lookup to `api.anthropic.com`.
 
+### Separate Claude accounts
+
+If you use one Claude account for work and another for personal projects, `bin/claude-profile` keeps them apart. Each account gets its own Claude Code config directory: its own login, settings, skills, MCP servers, memory and history. The folder you start Claude in picks the account.
+
+```sh
+ln -s "$PWD/bin/claude-profile" ~/.local/bin/claude-profile
+echo 'claude() { claude-profile run "$@"; }' >> ~/.zshrc
+```
+
+```
+# ~/.config/claude-profiles
+# name    config dir       folders that use it (longest match wins)
+work      ~/.claude-work   ~/Projects
+personal  ~/.claude        ~/PrivateProjects
+default   personal
+```
+
+```sh
+claude-profile login work   # sign the work profile in once
+claude-profile status       # profile, config dir and account for this folder
+claude-profile list         # every profile and its account
+```
+
+- Plain `claude` runs with the account that owns the folder. Forcing the other account in a claimed folder is refused unless `CLAUDE_PROFILE_FORCE=1`.
+- Add `claude-profile guard` as a `UserPromptSubmit` hook in every profile. It blocks a prompt before it is sent when the session runs on the wrong account for its folder, which also covers Claude Code started by an IDE or another app.
+- The profile at `~/.claude` runs with `CLAUDE_CONFIG_DIR` unset, because Claude Code stores the login under a different keychain entry whenever that variable is set.
+- In the menu bar app, the Claude tab gets an account switcher for projects, sessions, cost and plan limits. Running sessions show their account, and turn orange when it doesn't match their folder.
+
+#### GitHub accounts per folder
+
+The same folders can pick the `gh` account. Sign each GitHub account in to `gh` once (`gh auth login --hostname github.com --web`; `gh` keeps several logins per host), name each profile's login in the config, and route `gh` through `claude-profile`:
+
+```
+# ~/.config/claude-profiles
+github    work             your-work-login
+github    personal         your-private-login
+```
+
+```sh
+echo 'gh() { claude-profile gh "$@"; }' >> ~/.zshrc
+```
+
+- Plain `gh` runs with the login of the profile that owns the folder (as `GH_TOKEN`, from `gh auth token --user`). Without a `github` line it's plain `gh`, and so is `gh auth`, which can't store or switch logins while `GH_TOKEN` is set. An explicit `GH_TOKEN` wins.
+- If the folder's login isn't signed in to `gh`, the command stops with how to sign it in, rather than running as the other account.
+- `claude-profile status` and `list` show the GitHub login; the menu bar app shows it under each profile's Claude account, or a "Sign in to GitHub" button.
+- Git pushes don't go through `gh`: give each account its own SSH key and host alias for that.
+
 ### How it works
 
 The app is a small SwiftUI program that runs `devdash --serve` in the background. Release builds run the copy of devdash bundled inside the app. Local builds use the CLI from your checkout or `PATH`. That process sends a JSON snapshot every few seconds and accepts commands (kill, stop, details, usage and so on) over stdin/stdout, so the terminal UI and the app share the same data code. If the CLI is missing or too old, the app shows the command to fix it and can run it in Terminal.
@@ -260,6 +307,7 @@ devdash/
   screens.py       # modal screens (logs, details, cleanup, graph, heatmap, launch menu)
   processes.py     # process, Docker, system and Claude Code data collection
   claude_usage.py  # plan limits and API-equivalent cost from transcripts
+  claude_profiles.py # Claude Code profiles from ~/.config/claude-profiles
   bridge.py        # JSON-lines bridge for the menu bar app (--serve)
   demo.py          # synthetic data for --demo and screenshots
   cli.py           # command-line entry point
@@ -270,6 +318,7 @@ macos/
     Disk/               # disk scanner, cache, cleanup rules, treemap and Disk window
   Resources/            # app icon
   scripts/              # build-app.sh, embed-python.sh, make-appcast.py, make-icon.swift
+bin/claude-profile      # run Claude Code with the account that owns each folder
 scripts/                # screenshot generation
 .github/workflows/      # macOS build and release
 install.sh              # one-line installer
