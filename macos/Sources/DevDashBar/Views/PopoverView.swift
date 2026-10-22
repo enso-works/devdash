@@ -209,11 +209,25 @@ private struct HeaderView: View {
                         .foregroundStyle(.tertiary)
                 }
             }
+            IconButton(
+                symbol: jiggler.isOn ? "cup.and.saucer.fill" : "cup.and.saucer",
+                help: jigglerHelp,
+                tint: jiggler.isOn ? .accentColor : .primary
+            ) { jiggler.toggle() }
             IconButton(symbol: "arrow.clockwise", help: "Refresh now") { store.refresh() }
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 8)
+    }
+
+    private var jiggler: Jiggler { .shared }
+
+    private var jigglerHelp: String {
+        guard jiggler.isOn else { return "Keep awake: stop the Mac from sleeping and you from showing as away" }
+        return jiggler.canNudge
+            ? "Keeping awake. Click to stop"
+            : "Keeping awake, without the cursor nudge: allow devdash under Privacy & Security > Accessibility"
     }
 
     private var statusColor: Color {
