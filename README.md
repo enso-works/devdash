@@ -20,6 +20,7 @@ devdash shows all of it on one screen:
 - **Disk tree**: a treemap of your home folder that shows what takes up space and suggests what you can safely reclaim.
 - **Claude Code**: running sessions, projects and recent sessions. Resume any of them in a new Terminal window.
 - **Claude usage**: your plan limits (5-hour session and weekly) and what your usage would cost at API prices.
+- **Separate Claude accounts**: work and personal Claude Code accounts on one Mac, picked by the folder you start in.
 - **System**: CPU, memory, swap, disk, network and the heaviest processes.
 
 ## Install
@@ -178,6 +179,8 @@ echo 'gh() { claude-profile gh "$@"; }' >> ~/.zshrc
 - If the folder's login isn't signed in to `gh`, the command stops with how to sign it in, rather than running as the other account.
 - `claude-profile status` and `list` show the GitHub login; the menu bar app shows it under each profile's Claude account, or a "Sign in to GitHub" button.
 - Git pushes don't go through `gh`: give each account its own SSH key and host alias for that.
+
+The walkthrough, including why the usual `CLAUDE_CONFIG_DIR` aliases log you out: [Claude Code multiple accounts, one per folder](https://bavrk.com/articles/claude-code-multiple-accounts).
 
 ### How it works
 
