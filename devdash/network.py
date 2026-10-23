@@ -123,9 +123,9 @@ def server_urls(pid: int, binds: dict[int, set[str]], probe_tls: bool) -> list[d
 
 # Matched against the label and command, first match wins.
 _EXPOSE_HINTS = (
-    (re.compile(r"\bvite\b|\brsbuild\b|\bastro\b|\bnuxt\b|\bsvelte-kit\b|\bstorybook\b|\bremix\b"), "Restart it with --host, for example npm run dev -- --host"),
+    (re.compile(r"\bvite\b|\bastro\b|\bnuxt\b|\bsvelte-kit\b|\bremix\b"), "Restart it with --host, for example npm run dev -- --host"),
     (re.compile(r"\bnext\b"), "Restart it with -H 0.0.0.0, for example npm run dev -- -H 0.0.0.0"),
-    (re.compile(r"\bng serve\b|@angular"), "Restart it with --host 0.0.0.0"),
+    (re.compile(r"\bng serve\b|@angular|\brsbuild\b|\bstorybook\b|webpack"), "Restart it with --host 0.0.0.0"),
     (re.compile(r"\buvicorn\b|\bfastapi\b|\bflask\b|\bhypercorn\b|\bgranian\b"), "Restart it with --host 0.0.0.0"),
     (re.compile(r"\bgunicorn\b"), "Restart it with --bind 0.0.0.0:PORT"),
     (re.compile(r"\bmanage\.py runserver\b|\brunserver\b"), "Restart it with runserver 0.0.0.0:PORT"),

@@ -67,3 +67,5 @@ def test_expose_hints():
     assert "-H 0.0.0.0" in network.expose_hint("next dev", "next dev", 3000)
     assert "0.0.0.0:8000" in network.expose_hint("manage.py", "python manage.py runserver", 8000)
     assert "0.0.0.0" in network.expose_hint("server.mjs", "node server.mjs", 8765)
+    assert "--host 0.0.0.0" in network.expose_hint("storybook", "storybook dev -p 6006", 6006)
+    assert "--host 0.0.0.0" in network.expose_hint("rsbuild", "rsbuild dev", 3001)
