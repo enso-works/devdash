@@ -174,6 +174,14 @@ enum Renderer {
             .forEach(store.toggleCollapsed)
     }
 
+    /// The QR page of the first app server that matches.
+    @MainActor
+    private static func urlRoute(_ store: Store, where match: (Server) -> Bool) -> [Route] {
+        guard let server = store.servers.first(where: { $0.isApp && match($0) }),
+              let port = server.ports.first else { return [] }
+        return [.serverURL(pid: server.pid, port: port)]
+    }
+
     @MainActor
     private static func render(to dir: URL) async {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -196,6 +204,8 @@ enum Renderer {
             ("project", { store.routes = store.claude?.projects.first.map { [.claudeProject(path: $0.path)] } ?? [] }),
             ("detail", { store.routes = store.servers.first.map { [.processDetail(pid: $0.pid, name: $0.displayName)] } ?? [] }),
             ("settings", { store.routes = [.settings] }),
+            ("qrcode", { store.routes = urlRoute(store) { $0.primaryURL?.lan != nil } }),
+            ("qrcode-localhost", { store.routes = urlRoute(store) { $0.exposeHint?.hasPrefix("Restart") == true } }),
         ]
         for (name, apply) in screens {
             apply()
