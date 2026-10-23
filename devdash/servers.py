@@ -14,6 +14,7 @@ from pathlib import Path
 import psutil
 
 from devdash.config import tomllib
+from devdash.network import expose_hint, forget_exited, server_urls
 from devdash.processes import _format_uptime, _shorten_command, _shorten_cwd
 
 HOME = Path.home()
@@ -71,6 +72,10 @@ class Server:
     project_root: str = ""
     project_name: str = ""
     package: str = ""
+    # Per port: {port, local, lan, exposed}. See devdash.network.server_urls.
+    urls: list[dict] = field(default_factory=list)
+    # How to make loopback-only ports reachable from a phone, when there are any.
+    expose_hint: str = ""
 
 
 # -- projects ----------------------------------------------------------------
@@ -247,10 +252,11 @@ def get_servers(node_pids: set[int], docker_ports: set[int]) -> list[Server]:
             if uids is None or uids.real != uid:
                 continue
             pid = info["pid"]
-            ports = sorted({
-                c.laddr.port for c in proc.net_connections(kind="inet")
-                if c.status == psutil.CONN_LISTEN and c.laddr
-            })
+            binds: dict[int, set[str]] = {}
+            for c in proc.net_connections(kind="inet"):
+                if c.status == psutil.CONN_LISTEN and c.laddr:
+                    binds.setdefault(c.laddr.port, set()).add(c.laddr.ip)
+            ports = sorted(binds)
             if not ports and pid not in node_pids:
                 continue
             if ports and docker_ports and set(ports) <= docker_ports:
@@ -270,14 +276,20 @@ def get_servers(node_pids: set[int], docker_ports: set[int]) -> list[Server]:
                 cpu = proc.cpu_percent(interval=0)
             except (psutil.AccessDenied, psutil.NoSuchProcess):
                 cpu = 0.0
+            kind = _kind(runtime, exe, proc.ppid(), ports, project)
+            label = _label(name, runtime, cmdline)
+            command = _shorten_command(cmdline)
+            # Only apps get the TLS probe: databases log a failed handshake as an error.
+            urls = server_urls(pid, binds, probe_tls=kind == "app")
+            hidden = [u["port"] for u in urls if not u["exposed"]]
 
             results.append(Server(
                 pid=pid,
                 name=name,
-                label=_label(name, runtime, cmdline),
+                label=label,
                 runtime=runtime,
-                kind=_kind(runtime, exe, proc.ppid(), ports, project),
-                command=_shorten_command(cmdline),
+                kind=kind,
+                command=command,
                 cpu_percent=cpu,
                 memory_mb=proc.memory_info().rss / (1024 * 1024),
                 ports=ports,
@@ -288,9 +300,12 @@ def get_servers(node_pids: set[int], docker_ports: set[int]) -> list[Server]:
                 project_root=project.root,
                 project_name=project.name,
                 package=project.package,
+                urls=urls,
+                expose_hint=expose_hint(label, command, hidden[0]) if hidden else "",
             ))
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
             continue
 
+    forget_exited({s.pid for s in results})
     results.sort(key=lambda s: (s.ports[0] if s.ports else 1 << 20, s.pid))
     return results

@@ -39,6 +39,7 @@ from devdash.processes import (
     kill_process,
     stop_docker_container,
 )
+from devdash.network import lan_ip
 from devdash.servers import get_servers, project_infos, resolve_project
 
 CLAUDE_REFRESH_EVERY = 5  # ticks
@@ -171,6 +172,7 @@ class Bridge:
             "system": _asdict(stats),
             "node": node,
             "servers": [_asdict(s) for s in servers],
+            "lan_ip": lan_ip(),
             "projects": project_infos(roots - {""}),
             "docker": docker_dicts,
             "processes": [_asdict(p) for p in all_procs],
@@ -450,6 +452,7 @@ class DemoBridge(Bridge):
             "system": demo.system(),
             "node": demo.node(),
             "servers": demo.servers(),
+            "lan_ip": demo.LAN_IP,
             "projects": demo.projects(),
             # Demo paths do not exist, so the Compose working dir stands in for the resolved project.
             "docker": [
