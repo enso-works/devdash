@@ -8,11 +8,7 @@ See and manage your dev servers, Docker containers and Claude Code sessions from
 
 ![DevDash menu bar app](screenshots/app/hero.png)
 
-## Why
-
-If you use Claude Code (or any AI coding agent) across several projects, background processes pile up fast. You end up with orphaned `next dev` servers, runaway builds and forgotten Docker containers, and three copies of the same app fighting over port 3000 while your fan spins up.
-
-devdash shows all of it on one screen:
+## Features
 
 - **Dev servers**: every process listening on a port, in any language (Node, Bun, Deno, Python, Ruby, Go, Rust and more), with its memory, CPU and the project it belongs to. Local databases such as Homebrew Postgres show up as services.
 - **Docker**: containers grouped by Compose stack, with status, health and ports.
@@ -20,7 +16,13 @@ devdash shows all of it on one screen:
 - **Disk tree**: a treemap of your home folder that shows what takes up space and suggests what you can safely reclaim.
 - **Claude Code**: running sessions, projects and recent sessions. Resume any of them in a new Terminal window.
 - **Claude usage**: your plan limits (5-hour session and weekly) and what your usage would cost at API prices.
+- **Separate Claude accounts**: work and personal Claude Code accounts on one Mac, picked by the folder you start in, with an account switcher in the menu bar and `gh` following the same folders. See [Separate Claude accounts](#separate-claude-accounts).
+- **Keep awake**: a mouse jiggler in the menu bar. Stops the Mac sleeping and keeps Teams and Slack from marking you away. See [Menu bar app](#menu-bar-app-macos).
 - **System**: CPU, memory, swap, disk, network and the heaviest processes.
+
+## Why
+
+If you use Claude Code (or any AI coding agent) across several projects, background processes pile up fast. You end up with orphaned `next dev` servers, runaway builds and forgotten Docker containers, and three copies of the same app fighting over port 3000 while your fan spins up. devdash shows all of it on one screen and lets you clean it up.
 
 ## Install
 
@@ -61,7 +63,7 @@ Run it again to update. You can also run `devdash --update`, or use the prompt t
 open ~/Applications/DevDash.app
 ```
 
-The menu bar shows how many dev servers and containers are running, plus your current Claude session usage (for example `9 · 42%`). The icon switches to a flame when CPU or memory goes over your configured threshold. Click it to open the dashboard.
+The menu bar shows how many dev servers and containers are running, plus your current Claude session usage (for example `9 · 42%`). The icon switches to a flame when CPU or memory goes over your configured threshold, and to a cup while keep awake is on. Click it to open the dashboard.
 
 | Running, by project | Project overview | System |
 |---|---|---|
@@ -84,6 +86,7 @@ What you can do:
   - project pages with one-click launch: new session, continue, plan mode, resume picker, skip permissions, or a plain terminal in that folder.
 - **Cleanup**: listed under Needs you when devdash finds idle, orphaned or zombie processes, or containers running longer than your stale threshold. Pick which ones to remove and clean them up together.
 - **Footer**: Disk tree, dependency graph and activity heatmap. The `...` menu has JSON export, the terminal UI, What's new, Check for updates and Quit.
+- **Keep awake**: the cup in the header. While it's on, the Mac doesn't sleep, and after 50 seconds without input devdash moves the cursor one point and back, too fast to see, so Teams and Slack keep you active. Moving the cursor needs Accessibility access, which macOS asks for the first time you turn it on; without it only the sleep prevention works. It stays on across restarts. More in [Mouse jiggler for Mac](https://bavrk.com/articles/mouse-jiggler-for-mac).
 - **Keyboard**: Cmd+1 to Cmd+3 switch tabs, Cmd+F filters, Esc clears the filter.
 - **Notifications**: a macOS notification when a dev server starts or exits, a container stops, or a watched port comes up.
 - **Settings**: launch at login, editor (VS Code or Cursor), whether the menu bar shows the count and usage percentage, notifications, and a custom `devdash` path.
@@ -178,6 +181,8 @@ echo 'gh() { claude-profile gh "$@"; }' >> ~/.zshrc
 - If the folder's login isn't signed in to `gh`, the command stops with how to sign it in, rather than running as the other account.
 - `claude-profile status` and `list` show the GitHub login; the menu bar app shows it under each profile's Claude account, or a "Sign in to GitHub" button.
 - Git pushes don't go through `gh`: give each account its own SSH key and host alias for that.
+
+The walkthrough, including why the usual `CLAUDE_CONFIG_DIR` aliases log you out: [Claude Code multiple accounts, one per folder](https://bavrk.com/articles/claude-code-multiple-accounts).
 
 ### How it works
 

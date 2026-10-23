@@ -61,7 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Also applies when run unbundled via `swift run`, where LSUIElement is absent.
         NSApp.setActivationPolicy(.accessory)
-        MainActor.assumeIsolated { Updater.shared.start() }
+        MainActor.assumeIsolated {
+            Updater.shared.start()
+            Jiggler.shared.start()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -95,7 +98,8 @@ struct MenuBarLabel: View {
     private var symbol: String {
         switch store.connection {
         case .failed, .missingBinary: "exclamationmark.triangle"
-        default: store.isUnderPressure ? "flame" : "server.rack"
+        default:
+            if store.isUnderPressure { "flame" } else if Jiggler.shared.isOn { "cup.and.saucer.fill" } else { "server.rack" }
         }
     }
 }
