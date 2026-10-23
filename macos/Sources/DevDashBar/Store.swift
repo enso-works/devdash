@@ -39,6 +39,7 @@ enum Grouping: String, CaseIterable, Identifiable {
 
 enum Route: Hashable {
     case processDetail(pid: Int, name: String)
+    case serverURL(pid: Int, port: Int)
     case claudeProject(path: String)
     case cleanup
     case graph

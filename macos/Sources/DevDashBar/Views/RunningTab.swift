@@ -340,7 +340,7 @@ struct ServerRow: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
-                        ForEach(server.ports.prefix(3), id: \.self) { PortChip(port: $0) }
+                        ForEach(server.ports.prefix(3), id: \.self) { PortChip(port: $0, url: server.url(for: $0).local) }
                         if server.ports.count > 3 {
                             Text("+\(server.ports.count - 3)").font(.system(size: 10)).foregroundStyle(.secondary)
                         }
@@ -358,8 +358,11 @@ struct ServerRow: View {
                 Metric(text: Format.memory(server.memoryMb))
             }
         } actions: {
-            if let port = server.ports.first {
-                IconButton(symbol: "safari", help: "Open localhost:\(port)") { Launcher.openPort(port) }
+            if let url = server.primaryURL {
+                IconButton(symbol: "safari", help: "Open \(url.local)") { Launcher.openURL(url.local) }
+                if server.isApp {
+                    IconButton(symbol: "qrcode", help: "Open on your phone", action: showQRCode)
+                }
             }
             IconButton(symbol: "chevron.left.forwardslash.chevron.right", help: "Open in editor") {
                 store.openInEditor(server.cwdFull)
@@ -370,10 +373,15 @@ struct ServerRow: View {
         }
         .contextMenu {
             ForEach(server.ports, id: \.self) { port in
-                Button("Open localhost:\(String(port))") { Launcher.openPort(port) }
+                let url = server.url(for: port)
+                Button("Open \(url.local.replacingOccurrences(of: "http://", with: ""))") { Launcher.openURL(url.local) }
             }
-            if let port = server.ports.first {
-                Button("Copy URL") { Pasteboard.copy("http://localhost:\(port)") }
+            if let url = server.primaryURL {
+                Button("Copy URL") { Pasteboard.copy(url.local) }
+                if let lan = url.lan {
+                    Button("Copy Network URL") { Pasteboard.copy(lan) }
+                }
+                Button("Show QR Code", action: showQRCode)
                 Divider()
             }
             Button("Show Details", action: showDetail)
@@ -396,6 +404,11 @@ struct ServerRow: View {
 
     private func showDetail() {
         store.push(.processDetail(pid: server.pid, name: server.displayName))
+    }
+
+    private func showQRCode() {
+        guard let port = server.ports.first else { return }
+        store.push(.serverURL(pid: server.pid, port: port))
     }
 }
 

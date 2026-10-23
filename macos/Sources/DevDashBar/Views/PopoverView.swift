@@ -35,6 +35,7 @@ private struct RouteView: View {
     var body: some View {
         switch route {
         case let .processDetail(pid, name): ProcessDetailView(pid: pid, name: name)
+        case let .serverURL(pid, port): ServerURLView(pid: pid, port: port)
         case let .claudeProject(path): ClaudeProjectView(path: path)
         case .cleanup: CleanupView()
         case .graph: GraphView()
