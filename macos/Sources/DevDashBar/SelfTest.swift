@@ -205,6 +205,7 @@ enum Renderer {
             ("detail", { store.routes = store.servers.first.map { [.processDetail(pid: $0.pid, name: $0.displayName)] } ?? [] }),
             ("settings", { store.routes = [.settings] }),
             ("qrcode", { store.routes = urlRoute(store) { $0.primaryURL?.lan != nil } }),
+            ("worktrees", { store.routes = [.worktrees(repo: nil, cleanup: false)] }),
             ("qrcode-localhost", { store.routes = urlRoute(store) { $0.exposeHint?.hasPrefix("Restart") == true } }),
         ]
         for (name, apply) in screens {
