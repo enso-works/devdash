@@ -103,7 +103,7 @@ To try a dev server on your phone, hover it in Running and click the QR button, 
 
 A phone can only reach a server that listens on all interfaces (`0.0.0.0` or `::`). Vite, Astro, uvicorn, Rails and many other dev servers listen on `localhost` by default, so the page says "Only this Mac can open it" and shows the flag for that server, such as `--host` for Vite or `--host 0.0.0.0` for uvicorn. If the code still doesn't open, check that the macOS firewall allows incoming connections for the server's runtime (System Settings > Network > Firewall).
 
-The network address is the Mac's private IPv4 address on Wi-Fi or Ethernet. VPN tunnels are skipped.
+The network address is the Mac's private IPv4 address on Wi-Fi or Ethernet. VPN tunnels are skipped. More in [How to access localhost from your phone](https://bavrk.com/articles/access-localhost-from-phone).
 
 ### Disk tree
 
