@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+- **Server URLs and QR codes**: the QR button on a dev server, or Show QR Code in its menu, opens a page with the server's network URL as a QR code, so a phone on the same Wi-Fi opens it in one scan. It also lists the localhost and network URLs with copy and open buttons, and a port picker for servers with several ports.
+- Servers that listen on localhost only say "Only this Mac can open it" and show how to fix that for their runtime, such as `--host` for Vite or `--host 0.0.0.0` for uvicorn.
+- Server menus have Copy Network URL and Show QR Code. Option-click a port chip to copy its URL.
+- `devdash --serve` reports each server's `urls` (port, localhost URL, network URL and whether other devices can reach it), an `expose_hint`, and the Mac's `lan_ip`.
+
+### Changed
+- Port chips, Open and Copy URL use https for servers that speak TLS, such as Vite with `--https`.
+
 ## 0.4.0
 
 ### Added
