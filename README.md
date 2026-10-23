@@ -121,7 +121,7 @@ Each worktree shows its branch, which tool created it (Claude Code worktrees get
 - **Stale**: untouched for a week.
 - **Active**: everything else.
 
-Remove a worktree from its row or right-click menu. devdash runs `git worktree remove`, then `git worktree prune`, and for merged branches `git branch -d`, which keeps a branch git doesn't consider merged (squash merges) and says so. It never forces anything: worktrees with changes, with something running in them, locked ones and the main checkout can't be removed from devdash. Merged worktrees nothing has touched for a day also appear under Needs you.
+Remove a worktree from its row or right-click menu. devdash runs `git worktree remove`, then `git worktree prune`, and for merged branches `git branch -d`, which keeps a branch git doesn't consider merged (squash merges) and says so. It never forces anything: worktrees with changes, with something running in them, locked ones and the main checkout can't be removed from devdash. Merged worktrees nothing has touched for a day also appear under Needs you. More in [git worktree remove: clean up worktrees without --force](https://bavrk.com/articles/git-worktree-remove).
 
 ### Disk tree
 
