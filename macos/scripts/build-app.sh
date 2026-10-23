@@ -186,7 +186,13 @@ info "Creating $DMG"
 STAGE="$(mktemp -d)"
 cp -R "$OUT" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -quiet -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format ULMO "$DMG"
+# hdiutil fails now and then on CI runners with "Resource busy", so retry it.
+for attempt in 1 2 3 4; do
+    hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format ULMO "$DMG" && break
+    [[ $attempt -eq 4 ]] && exit 1
+    info "hdiutil create failed (attempt $attempt), retrying in $((attempt * 10))s"
+    sleep $((attempt * 10))
+done
 rm -rf "$STAGE"
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
