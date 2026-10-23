@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### Added
 - **Separate Claude accounts**: `bin/claude-profile` runs Claude Code with the account that owns the current folder, from `~/.config/claude-profiles`, and its `guard` hook blocks prompts sent from the wrong account.
