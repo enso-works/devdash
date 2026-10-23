@@ -8,7 +8,7 @@ struct AttentionItem: Identifiable, Equatable {
         static func < (lhs: Severity, rhs: Severity) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
-    enum Action { case retry, cleanup, disk, usage, whatsNew }
+    enum Action { case retry, cleanup, disk, usage, whatsNew, worktrees }
 
     let id: String
     let severity: Severity
@@ -86,6 +86,18 @@ enum Attention {
             ))
         }
 
+        let merged = store.idleMergedWorktrees
+        if !merged.isEmpty {
+            let repos = Set(merged.compactMap { store.repo(of: $0)?.name }).sorted()
+            items.append(AttentionItem(
+                id: "worktrees", severity: .info, symbol: "arrow.triangle.branch",
+                title: "\(merged.count) merged worktree\(merged.count == 1 ? "" : "s") to clean up",
+                detail: "In " + ListFormatter.localizedString(byJoining: Array(repos.prefix(3))),
+                actionTitle: "Review", action: .worktrees,
+                signature: merged.map(\.path).sorted().joined(separator: ",")
+            ))
+        }
+
         if let note = store.whatsNew {
             let title = note.welcome ? "Welcome to devdash" : "What's new in \(note.releases.first?.version ?? "")"
             let detail = note.welcome
@@ -159,6 +171,7 @@ struct AttentionSection: View {
         case .cleanup: store.push(.cleanup)
         case .usage: store.push(.usage)
         case .whatsNew: store.push(.whatsNew)
+        case .worktrees: store.push(.worktrees(repo: nil, cleanup: true))
         case .disk:
             openWindow(id: "disk")
             NSApp.activate(ignoringOtherApps: true)

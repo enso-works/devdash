@@ -36,6 +36,7 @@ private struct RouteView: View {
         switch route {
         case let .processDetail(pid, name): ProcessDetailView(pid: pid, name: name)
         case let .serverURL(pid, port): ServerURLView(pid: pid, port: port)
+        case let .worktrees(repo, cleanup): WorktreesView(repo: repo, cleanup: cleanup)
         case let .claudeProject(path): ClaudeProjectView(path: path)
         case .cleanup: CleanupView()
         case .graph: GraphView()
@@ -404,6 +405,11 @@ private struct FooterBar: View {
                 NSApp.activate(ignoringOtherApps: true)
             }
             FooterButton(title: "Graph", symbol: "point.3.connected.trianglepath.dotted") { store.push(.graph) }
+            if !store.worktreeRepos.isEmpty {
+                FooterButton(title: "Worktrees", symbol: "arrow.triangle.branch") {
+                    store.push(.worktrees(repo: nil, cleanup: false))
+                }
+            }
             if store.hasClaude {
                 FooterButton(title: "Activity", symbol: "square.grid.3x3.fill") { store.push(.heatmap) }
             }
