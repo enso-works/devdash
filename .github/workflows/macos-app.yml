@@ -8,12 +8,14 @@ on:
     paths:
       - "macos/**"
       - "devdash/**"
+      - "tests/**"
       - "CHANGELOG.md"
       - ".github/workflows/macos-app.yml"
   pull_request:
     paths:
       - "macos/**"
       - "devdash/**"
+      - "tests/**"
       - "CHANGELOG.md"
       - ".github/workflows/macos-app.yml"
   workflow_dispatch:
@@ -35,6 +37,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Python tests
+        run: |
+          python3 -m pip install --quiet psutil pytest
+          python3 -m pytest -q tests
 
       - name: Check version and release notes
         id: check
