@@ -8,11 +8,7 @@ See and manage your dev servers, Docker containers and Claude Code sessions from
 
 ![DevDash menu bar app](screenshots/app/hero.png)
 
-## Why
-
-If you use Claude Code (or any AI coding agent) across several projects, background processes pile up fast. You end up with orphaned `next dev` servers, runaway builds and forgotten Docker containers, and three copies of the same app fighting over port 3000 while your fan spins up.
-
-devdash shows all of it on one screen:
+## Features
 
 - **Dev servers**: every process listening on a port, in any language (Node, Bun, Deno, Python, Ruby, Go, Rust and more), with its memory, CPU and the project it belongs to. Local databases such as Homebrew Postgres show up as services.
 - **Docker**: containers grouped by Compose stack, with status, health and ports.
@@ -20,9 +16,13 @@ devdash shows all of it on one screen:
 - **Disk tree**: a treemap of your home folder that shows what takes up space and suggests what you can safely reclaim.
 - **Claude Code**: running sessions, projects and recent sessions. Resume any of them in a new Terminal window.
 - **Claude usage**: your plan limits (5-hour session and weekly) and what your usage would cost at API prices.
-- **Separate Claude accounts**: work and personal Claude Code accounts on one Mac, picked by the folder you start in.
-- **Keep awake**: a mouse jiggler in the menu bar. Stops the Mac sleeping and keeps Teams and Slack from marking you away.
+- **Separate Claude accounts**: work and personal Claude Code accounts on one Mac, picked by the folder you start in, with an account switcher in the menu bar and `gh` following the same folders. See [Separate Claude accounts](#separate-claude-accounts).
+- **Keep awake**: a mouse jiggler in the menu bar. Stops the Mac sleeping and keeps Teams and Slack from marking you away. See [Menu bar app](#menu-bar-app-macos).
 - **System**: CPU, memory, swap, disk, network and the heaviest processes.
+
+## Why
+
+If you use Claude Code (or any AI coding agent) across several projects, background processes pile up fast. You end up with orphaned `next dev` servers, runaway builds and forgotten Docker containers, and three copies of the same app fighting over port 3000 while your fan spins up. devdash shows all of it on one screen and lets you clean it up.
 
 ## Install
 
