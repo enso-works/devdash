@@ -41,9 +41,11 @@ from devdash.processes import (
 )
 from devdash.network import lan_ip
 from devdash.servers import get_servers, project_infos, resolve_project
+from devdash import worktrees
 
 CLAUDE_REFRESH_EVERY = 5  # ticks
 USAGE_REFRESH_SECONDS = 30.0
+WORKTREES_REFRESH_SECONDS = 60.0
 
 
 def _asdict(obj):
@@ -81,11 +83,18 @@ class Bridge:
         self._all_procs = []
         self._stats = None
         self._claude_roots: set[str] = set()
+        self._claude_cwds: list[str] = []
         self._usage_enabled = self._has_claude
         self._trackers: dict[str, UsageTracker] = {}
         self._usage_payload: dict | None = None
         self._usage_version = 0
         self._usage_sent = 0
+        self._busy_cwds: list[str] = []  # where servers and Claude sessions run, for remove_worktree
+        self._snapshot_roots: set[str] = set()
+        self._worktrees_wake = threading.Event()
+        self._worktrees_payload: list | None = None
+        self._worktrees_version = 0
+        self._worktrees_sent = 0
 
     # -- output --------------------------------------------------------------
 
@@ -113,6 +122,7 @@ class Bridge:
         threading.Thread(target=self._read_commands, daemon=True).start()
         if self._usage_enabled:
             threading.Thread(target=self._usage_loop, daemon=True).start()
+        threading.Thread(target=self._worktrees_loop, daemon=True).start()
         time.sleep(0.5)
         while not self._stop.is_set():
             try:
@@ -165,6 +175,9 @@ class Bridge:
         docker_dicts = [_with_project(_asdict(c), c.compose_working_dir) for c in docker]
         claude = self._claude_payload() if self._has_claude and self._tick % CLAUDE_REFRESH_EVERY == 0 else None
         roots = {s.project_root for s in servers} | {d["project_root"] for d in docker_dicts} | self._claude_roots
+        with self._state_lock:
+            self._snapshot_roots = roots - {""}
+            self._busy_cwds = [s.cwd_full for s in servers] + list(self._claude_cwds)
 
         snapshot = {
             "type": "snapshot",
@@ -185,6 +198,9 @@ class Bridge:
             if self._usage_version != self._usage_sent:
                 snapshot["usage"] = self._usage_payload
                 self._usage_sent = self._usage_version
+            if self._worktrees_version != self._worktrees_sent:
+                snapshot["worktrees"] = self._worktrees_payload
+                self._worktrees_sent = self._worktrees_version
         self._tick += 1
         return snapshot
 
@@ -203,6 +219,7 @@ class Bridge:
             d["expected_profile"] = profiles.route(d["cwd_full"])
             instances.append(_with_project(d, d["cwd_full"]))
         self._claude_roots = {d["project_root"] for d in instances}
+        self._claude_cwds = [d["cwd_full"] for d in instances]
         return {
             "profile": selected.name,
             "profiles": [
@@ -221,6 +238,53 @@ class Bridge:
             "sessions": [_asdict(s) for s in get_all_recent_sessions(selected.dir)],
             "stats": _claude_stats_payload(get_claude_stats(selected.dir)),
         }
+
+    # -- worktrees -----------------------------------------------------------
+
+    def _worktree_candidates(self) -> set[str]:
+        """Folders to look for repositories in: projects on screen, and the Claude projects of every profile."""
+        with self._state_lock:
+            paths = set(self._snapshot_roots)
+        for profile in self._profiles.profiles:
+            if profile.dir.is_dir():
+                try:
+                    paths |= {p.path for p in get_claude_projects(profile.dir)}
+                except Exception:
+                    pass
+        return paths
+
+    def _refresh_worktrees(self) -> None:
+        payload = [_asdict(r) for r in worktrees.scan(self._worktree_candidates())]
+        with self._state_lock:
+            if payload != self._worktrees_payload:
+                self._worktrees_payload = payload
+                self._worktrees_version += 1
+
+    def _worktrees_loop(self) -> None:
+        time.sleep(2)  # let the first snapshot fill in the project roots
+        while not self._stop.is_set():
+            try:
+                self._refresh_worktrees()
+            except Exception as e:
+                self.emit({"type": "error", "message": f"worktree scan failed: {e}"})
+            self._worktrees_wake.wait(WORKTREES_REFRESH_SECONDS)
+            self._worktrees_wake.clear()
+
+    def _cmd_refresh_worktrees(self, cmd: dict):
+        self._refresh_worktrees()
+        self._wake.set()
+        return None
+
+    def _cmd_worktree_size(self, cmd: dict):
+        return worktrees.size_bytes(str(cmd["path"]))
+
+    def _cmd_remove_worktree(self, cmd: dict):
+        with self._state_lock:
+            busy = list(self._busy_cwds)
+        result = worktrees.remove(str(cmd["path"]), bool(cmd.get("delete_branch")), busy)
+        self._refresh_worktrees()
+        self._wake.set()
+        return result
 
     # -- usage ---------------------------------------------------------------
 
@@ -465,6 +529,7 @@ class DemoBridge(Bridge):
         if self._tick % CLAUDE_REFRESH_EVERY == 0:
             snapshot["claude"] = self._cmd_refresh_claude({})
             snapshot["usage"] = demo.usage()
+            snapshot["worktrees"] = demo.worktrees()
         self._tick += 1
         return snapshot
 
@@ -509,6 +574,19 @@ class DemoBridge(Bridge):
     def _cmd_project_detail(self, cmd: dict):
         from devdash import demo
         return demo.project_detail(str(cmd["path"]))
+
+    def _worktrees_loop(self) -> None:
+        pass  # never scan the real repositories in demo mode
+
+    def _cmd_refresh_worktrees(self, cmd: dict):
+        return None
+
+    def _cmd_worktree_size(self, cmd: dict):
+        from devdash import demo
+        return demo.worktree_size(str(cmd["path"]))
+
+    def _cmd_remove_worktree(self, cmd: dict):
+        return {"path": cmd["path"], "branch": "", "branch_deleted": bool(cmd.get("delete_branch")), "note": ""}
 
     def _cmd_project_sessions(self, cmd: dict):
         from devdash import demo
