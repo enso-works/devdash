@@ -162,21 +162,22 @@ notarize() {
 
 # The ticket lookup behind stapler goes to CloudKit, which drops connections on CI runners
 # (error 68) and can lag a few seconds behind notarization (error 65), so retry it.
-staple() {
+# Usage: stapler staple|validate <path>
+stapler() {
     local attempt
     for attempt in 1 2 3 4 5; do
-        xcrun stapler staple "$1" && return 0
-        info "Stapling $(basename "$1") failed (attempt $attempt), retrying in $((attempt * 15))s"
+        xcrun stapler "$1" "$2" && return 0
+        info "stapler $1 $(basename "$2") failed (attempt $attempt), retrying in $((attempt * 15))s"
         sleep $((attempt * 15))
     done
-    xcrun stapler staple "$1"
+    xcrun stapler "$1" "$2"
 }
 
 info "Creating $ZIP"
 ditto -c -k --keepParent "$OUT" "$ZIP"
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
     notarize "$ZIP"
-    staple "$OUT"
+    stapler staple "$OUT"
     rm -f "$ZIP"
     ditto -c -k --keepParent "$OUT" "$ZIP"
 fi
@@ -192,10 +193,10 @@ if [[ -n "${SIGN_IDENTITY:-}" ]]; then
 fi
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
     notarize "$DMG"
-    staple "$DMG"
+    stapler staple "$DMG"
     info "Checking Gatekeeper"
-    xcrun stapler validate "$OUT"
-    xcrun stapler validate "$DMG"
+    stapler validate "$OUT"
+    stapler validate "$DMG"
     spctl --assess --type execute --verbose "$OUT"
     spctl --assess --type open --context context:primary-signature --verbose "$DMG"
 fi
