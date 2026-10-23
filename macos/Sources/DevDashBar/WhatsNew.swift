@@ -14,6 +14,14 @@ enum WhatsNew {
     }
 
     static let releases: [Release] = [
+        Release(version: "0.6.0", entries: [
+            Entry(symbol: "arrow.triangle.branch", title: "Worktrees",
+                  detail: "Every git worktree of your repositories, with changes, merged branches and what runs in them. Open it from the footer."),
+            Entry(symbol: "trash", title: "Clean up merged worktrees",
+                  detail: "Remove a merged worktree and its branch in one click. Worktrees with changes or something running are never touched."),
+            Entry(symbol: "bell.badge", title: "In Needs you",
+                  detail: "Merged worktrees nothing has touched for a day show up at the top."),
+        ]),
         Release(version: "0.5.0", entries: [
             Entry(symbol: "qrcode", title: "Open on your phone",
                   detail: "Hover a dev server and click the QR button. Scan the code with a phone on the same Wi-Fi to open the server there."),

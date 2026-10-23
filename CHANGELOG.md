@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+- **Worktrees**: a page with every linked git worktree of the repositories devdash knows about (projects with something running and the Claude Code projects of every account), with the branch, who created it, when it was last touched, its size, and whether it's running, has changes, is merged, or is stale. Open it from the footer or from **Worktrees** in a project's menu.
+- Remove a worktree from its row: `git worktree remove`, `git worktree prune`, and `git branch -d` for merged branches. Worktrees with changes, with a server or Claude session running in them, and the main checkout can't be removed.
+- Branches count as merged when they are merged into the default branch or their remote branch is gone, so squash-merged pull requests are caught too.
+- Needs you lists merged worktrees nothing has touched for a day.
+- Projects that are linked worktrees get a stacked icon on their branch chip in Running.
+- `devdash --serve` sends a `worktrees` list when it changes (scanned once a minute) and has `refresh_worktrees`, `worktree_size` and `remove_worktree` commands.
+
 ## 0.5.0
 
 ### Added
