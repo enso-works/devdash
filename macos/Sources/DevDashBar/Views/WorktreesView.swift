@@ -190,7 +190,8 @@ private struct WorktreeRow: View {
     }
 
     private var subtitle: String {
-        var parts = [worktree.folder]
+        // The repository header already shows the main checkout's folder.
+        var parts = worktree.isMain ? [] : [worktree.folder]
         parts.append(worktree.lastActivity.formatted(.relative(presentation: .named)))
         if let size = store.worktreeSizes[worktree.path] { parts.append(ByteFormat.string(size)) }
         let activity = store.activity(in: worktree)
