@@ -160,11 +160,23 @@ notarize() {
     xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait
 }
 
+# The ticket lookup behind stapler goes to CloudKit, which drops connections on CI runners
+# (error 68) and can lag a few seconds behind notarization (error 65), so retry it.
+staple() {
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        xcrun stapler staple "$1" && return 0
+        info "Stapling $(basename "$1") failed (attempt $attempt), retrying in $((attempt * 15))s"
+        sleep $((attempt * 15))
+    done
+    xcrun stapler staple "$1"
+}
+
 info "Creating $ZIP"
 ditto -c -k --keepParent "$OUT" "$ZIP"
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
     notarize "$ZIP"
-    xcrun stapler staple "$OUT"
+    staple "$OUT"
     rm -f "$ZIP"
     ditto -c -k --keepParent "$OUT" "$ZIP"
 fi
@@ -180,7 +192,7 @@ if [[ -n "${SIGN_IDENTITY:-}" ]]; then
 fi
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
     notarize "$DMG"
-    xcrun stapler staple "$DMG"
+    staple "$DMG"
     info "Checking Gatekeeper"
     xcrun stapler validate "$OUT"
     xcrun stapler validate "$DMG"
