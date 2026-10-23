@@ -289,7 +289,14 @@ The app needs Xcode 16+ (Swift 6) and macOS 14+. Useful tools:
 - It embeds Sparkle.
 - It signs every binary, innermost first, with the hardened runtime.
 
-Pushing a `v*` tag runs [the macOS workflow](.github/workflows/macos-app.yml). It self-tests the bridge, then builds, signs and notarizes the release. It writes the Sparkle `appcast.xml` and attaches everything to the GitHub release. The app checks `releases/latest/download/appcast.xml` for updates, and `install.sh` downloads the zip.
+Merging a pull request that changes the version releases it. [The macOS workflow](.github/workflows/macos-app.yml) runs on every pull request and on `main`:
+
+- On a pull request it self-tests the bridge and builds the app. If the PR changes `__version__` in `devdash/__init__.py` to a version that has no tag yet, it also checks that `CHANGELOG.md` has a `## <version>` section and `WhatsNew.swift` has an entry for it, so a release can't go out without notes.
+- On `main`, when that version has no `v<version>` tag, it builds, signs and notarizes the release, writes the Sparkle `appcast.xml`, publishes the GitHub release with the changelog section as its notes (which creates the tag), and updates the Homebrew cask. Merges that don't change the version are built but not released.
+
+To release: in the PR, bump `__version__`, rename `## Unreleased` in the changelog to `## <version>`, add a `Release(version:)` entry to `WhatsNew.swift`, then merge. If the run fails (a notarization hiccup, no macOS runner), re-run it from the Actions tab or run the workflow on `main`; it picks up where the release is missing.
+
+The app checks `releases/latest/download/appcast.xml` for updates, and `install.sh` downloads the zip.
 
 Repository secrets used by the workflow. Without them the build is ad-hoc signed and has no update feed.
 

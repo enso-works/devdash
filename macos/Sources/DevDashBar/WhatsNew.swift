@@ -14,6 +14,14 @@ enum WhatsNew {
     }
 
     static let releases: [Release] = [
+        Release(version: "0.4.0", entries: [
+            Entry(symbol: "cup.and.saucer", title: "Keep awake",
+                  detail: "The cup in the header keeps your Mac awake and, after a minute idle, nudges the cursor so Teams and Slack keep you active."),
+            Entry(symbol: "person.2", title: "Separate Claude accounts",
+                  detail: "Work and personal Claude Code accounts on one Mac, picked by folder. The Claude tab switches between them."),
+            Entry(symbol: "person.badge.key", title: "GitHub accounts per folder",
+                  detail: "claude-profile gh runs gh as the GitHub login that belongs to the folder you are in."),
+        ]),
         Release(version: "0.3.0", entries: [
             Entry(symbol: "bell.badge", title: "Needs you",
                   detail: "Cleanup suggestions, low disk space and plan limits now appear in one list at the top."),
