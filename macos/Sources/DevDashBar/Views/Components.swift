@@ -138,12 +138,22 @@ struct Sparkline: View {
 // MARK: - Chips and badges
 
 struct PortChip: View {
+    @Environment(Store.self) private var store
     let port: Int
+    /// What a click opens; defaults to http://localhost:PORT.
+    var url: String?
     var interactive = true
+
+    private var target: String { url ?? "http://localhost:\(port)" }
 
     var body: some View {
         Button {
-            Launcher.openPort(port)
+            if NSEvent.modifierFlags.contains(.option) {
+                Pasteboard.copy(target)
+                store.showToast("Copied \(target)")
+            } else {
+                Launcher.openURL(target)
+            }
         } label: {
             Text(verbatim: ":\(port)")
                 .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
@@ -154,7 +164,7 @@ struct PortChip: View {
         }
         .buttonStyle(.plain)
         .disabled(!interactive)
-        .help("Open http://localhost:\(port)")
+        .help("Open \(target). Option-click to copy.")
     }
 }
 

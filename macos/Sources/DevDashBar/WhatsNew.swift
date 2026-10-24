@@ -14,6 +14,14 @@ enum WhatsNew {
     }
 
     static let releases: [Release] = [
+        Release(version: "0.5.0", entries: [
+            Entry(symbol: "qrcode", title: "Open on your phone",
+                  detail: "Hover a dev server and click the QR button. Scan the code with a phone on the same Wi-Fi to open the server there."),
+            Entry(symbol: "lock.laptopcomputer", title: "Localhost-only servers",
+                  detail: "Servers a phone can't reach say so, with the flag that fixes it, such as --host for Vite."),
+            Entry(symbol: "link", title: "Copy URLs",
+                  detail: "Option-click a port to copy its URL. Server menus also have Copy Network URL."),
+        ]),
         Release(version: "0.4.0", entries: [
             Entry(symbol: "cup.and.saucer", title: "Keep awake",
                   detail: "The cup in the header keeps your Mac awake and, after a minute idle, nudges the cursor so Teams and Slack keep you active."),

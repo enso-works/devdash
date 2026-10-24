@@ -75,9 +75,20 @@ struct Server: Decodable, Sendable, Identifiable, Hashable {
     let projectRoot: String
     let projectName: String
     let package: String
+    /// Nil from a devdash CLI older than 0.5.
+    let urls: [ServerURL]?
+    let exposeHint: String?
 
     var id: Int { pid }
     var isBackground: Bool { kind == "background" }
+    var isApp: Bool { kind == "app" }
+
+    func url(for port: Int) -> ServerURL {
+        urls?.first { $0.port == port } ?? ServerURL(port: port, local: "http://localhost:\(port)", lan: nil, exposed: false)
+    }
+
+    /// The URL for the first port, which is the app itself for most dev servers.
+    var primaryURL: ServerURL? { ports.first.map(url(for:)) }
     var isService: Bool { kind == "service" }
     var displayName: String { label.isEmpty ? name : label }
     /// The command with paths shortened: relative to the working directory, `~` for home, and the
@@ -103,9 +114,20 @@ extension Server {
             pid: node.pid, name: node.name, label: node.displayName, runtime: "node",
             kind: node.ports.isEmpty ? "background" : "app", command: node.command,
             cpuPercent: node.cpuPercent, memoryMb: node.memoryMb, ports: node.ports, uptime: node.uptime,
-            started: 0, cwd: node.cwd, cwdFull: node.cwdFull, projectRoot: "", projectName: node.project, package: ""
+            started: 0, cwd: node.cwd, cwdFull: node.cwdFull, projectRoot: "", projectName: node.project, package: "",
+            urls: nil, exposeHint: nil
         )
     }
+}
+
+/// A port's address on this Mac, and on the local network when other devices can reach it.
+struct ServerURL: Decodable, Sendable, Hashable {
+    let port: Int
+    let local: String
+    /// Nil when the port listens on loopback only, or the Mac isn't on a network.
+    let lan: String?
+    /// Whether the port listens beyond loopback.
+    let exposed: Bool
 }
 
 /// Name and git branch of a project root that appears in the snapshot.

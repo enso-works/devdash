@@ -9,6 +9,8 @@ import random
 import time
 from datetime import date, datetime, timedelta
 
+from devdash.network import expose_hint
+
 HOME = "/Users/demo"
 _START = time.time()
 
@@ -43,6 +45,10 @@ SERVERS = [
     (38012, "chrome-devtools-mcp", "node", "background", "node ~/.npm/_npx/chrome-devtools-mcp/build/index.js", "~", [], "1d 3h", 131.0, 0.0, "", "", ""),
     (27640, "vite", "node", "background", "vite --port 5173", "~/code/old-prototype", [], "4d 6h", 88.0, 0.0, "~/code/old-prototype", "old-prototype", ""),
 ]
+
+LAN_IP = "192.168.1.24"
+# Ports that listen on loopback only, so the screenshots show both states of the QR code.
+LOOPBACK_ONLY = {4000, 8000, 4321, 3306, 33060, 20241}
 
 DOCKER = [
     ("a1b2c3d4e5f6", "storefront-postgres-1", "postgres:17", "Up 2 hours (healthy)", "0.0.0.0:5432->5432/tcp", "2 hours ago", "storefront", "postgres"),
@@ -104,6 +110,15 @@ def servers() -> list[dict]:
             "memory_mb": mem + random.uniform(-4, 4), "ports": ports, "uptime": uptime,
             "started": now - 600 * (i + 1), "cwd": cwd, "cwd_full": _full(cwd),
             "project_root": _full(root), "project_name": project, "package": package,
+            "urls": [
+                {"port": port, "local": f"http://localhost:{port}",
+                 "lan": None if port in LOOPBACK_ONLY else f"http://{LAN_IP}:{port}",
+                 "exposed": port not in LOOPBACK_ONLY}
+                for port in ports
+            ],
+            "expose_hint": next(
+                (expose_hint(label, command, port) for port in ports if port in LOOPBACK_ONLY), ""
+            ),
         })
     return result
 
