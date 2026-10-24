@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Streams `docker logs --follow` for one container.
+/// Streams `docker logs --follow` for a container, or `tail -F` for the log file of a run.
 @MainActor
 @Observable
 final class LogStream {
@@ -17,15 +17,20 @@ final class LogStream {
     @ObservationIgnored private var counter = 0
     private let maxLines = 5000
 
-    func start(containerId: String) {
+    func start(_ target: LogTarget) {
         stop()
-        guard let docker = ShellEnvironment.which("docker") else {
+        let process = Process()
+        if let file = target.file {
+            // -F keeps following when the log is truncated or replaced.
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/tail")
+            process.arguments = ["-n", "300", "-F", file]
+        } else if let containerId = target.containerId, let docker = ShellEnvironment.which("docker") {
+            process.executableURL = docker
+            process.arguments = ["logs", "--tail", "300", "--follow", containerId]
+        } else {
             failure = "docker CLI not found"
             return
         }
-        let process = Process()
-        process.executableURL = docker
-        process.arguments = ["logs", "--tail", "300", "--follow", containerId]
         process.environment = ShellEnvironment.childEnvironment()
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -63,10 +68,17 @@ final class LogStream {
 
     func clear() { lines.removeAll() }
 
+    /// Without terminal color codes and carriage-return redraws.
+    static func plain(_ text: String) -> String {
+        var text = text.replacing(#/\x1B\[[0-9;?]*[A-Za-z]/#, with: "")
+        if let last = text.split(separator: "\r", omittingEmptySubsequences: true).last { text = String(last) }
+        return text
+    }
+
     private func append(_ newLines: [String]) {
         for text in newLines {
             counter += 1
-            lines.append(Line(id: counter, text: text))
+            lines.append(Line(id: counter, text: Self.plain(text)))
         }
         if lines.count > maxLines { lines.removeFirst(lines.count - maxLines) }
     }
@@ -87,6 +99,7 @@ private final class LogBuffer: @unchecked Sendable {
 }
 
 struct LogsView: View {
+    @Environment(Store.self) private var store
     let target: LogTarget
     @State private var stream = LogStream()
     @State private var filter = ""
@@ -97,9 +110,13 @@ struct LogsView: View {
             HStack(spacing: 8) {
                 StatusDot(color: stream.isRunning ? .green : .secondary, pulsing: stream.isRunning)
                 Text(target.name).font(.system(size: 13, weight: .semibold))
-                Text(String(target.containerId.prefix(12)))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                if let containerId = target.containerId {
+                    Text(String(containerId.prefix(12)))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else if let run {
+                    RunStatusChip(run: run)
+                }
                 Spacer()
                 HStack(spacing: 6) {
                     Image(systemName: "line.3.horizontal.decrease").foregroundStyle(.secondary)
@@ -114,7 +131,17 @@ struct LogsView: View {
                     NSPasteboard.general.setString(visible.map(\.text).joined(separator: "\n"), forType: .string)
                 }
                 IconButton(symbol: "trash", help: "Clear") { stream.clear() }
-                IconButton(symbol: "arrow.clockwise", help: "Restart stream") { stream.start(containerId: target.containerId) }
+                if let run {
+                    Divider().frame(height: 16)
+                    IconButton(symbol: "arrow.clockwise", help: run.isAlive ? "Restart \(run.title)" : "Run \(run.title) again") {
+                        store.restartRun(run)
+                    }
+                    if run.isAlive {
+                        IconButton(symbol: "stop.circle", help: "Stop \(run.title)") { store.stopRun(run) }
+                    }
+                } else {
+                    IconButton(symbol: "arrow.clockwise", help: "Restart stream") { stream.start(target) }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -145,9 +172,12 @@ struct LogsView: View {
             }
         }
         .frame(minWidth: 520, minHeight: 300)
-        .onAppear { stream.start(containerId: target.containerId) }
+        .onAppear { stream.start(target) }
         .onDisappear { stream.stop() }
     }
+
+    /// The run whose log this is, while devdash still lists it.
+    private var run: ManagedRun? { target.runId.flatMap(store.run(id:)) }
 
     private var visible: [LogStream.Line] {
         filter.isEmpty ? stream.lines : stream.lines.filter { $0.text.localizedCaseInsensitiveContains(filter) }

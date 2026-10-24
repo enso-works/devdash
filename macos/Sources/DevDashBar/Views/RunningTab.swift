@@ -14,17 +14,19 @@ struct RunningGroup: Identifiable {
     var servers: [Server] = []
     var containers: [DockerContainer] = []
     var claude: [ClaudeInstance] = []
+    /// Runs devdash started that have no server row: starting, without a port, or ended.
+    var runs: [ManagedRun] = []
 
-    var count: Int { servers.count + containers.count + claude.count }
+    var count: Int { servers.count + containers.count + claude.count + runs.count }
     var isEmpty: Bool { count == 0 }
     var collapsedByDefault: Bool { kind == .services || kind == .other || kind == .background }
-    var stoppable: Int { servers.filter { !$0.isBackground }.count + containers.count }
+    var stoppable: Int { servers.filter { !$0.isBackground }.count + containers.count + runs.filter(\.isAlive).count }
     var canStop: Bool { (kind == .project || kind == .stack) && stoppable > 0 }
-    var latestStart: Double { servers.map(\.started).max() ?? 0 }
+    var latestStart: Double { (servers.map(\.started) + runs.map(\.started)).max() ?? 0 }
     var memoryMb: Double { servers.reduce(0) { $0 + $1.memoryMb } }
 
     /// Groups by project, with Services, Other and Background at the end.
-    static func byProject(servers: [Server], containers: [DockerContainer], claude: [ClaudeInstance]) -> [RunningGroup] {
+    static func byProject(servers: [Server], containers: [DockerContainer], claude: [ClaudeInstance], runs: [ManagedRun] = []) -> [RunningGroup] {
         var projects: [String: RunningGroup] = [:]
         var services = RunningGroup(id: "@services", kind: .services, name: "Services")
         var other = RunningGroup(id: "@other", kind: .other, name: "Other")
@@ -67,6 +69,11 @@ struct RunningGroup: Identifiable {
                 other.claude.append(instance)
             }
         }
+        for run in runs {
+            var group = project(run.projectRoot, run.projectName)
+            group.runs.append(run)
+            projects[run.projectRoot] = group
+        }
 
         background.servers.sort { $0.memoryMb > $1.memoryMb }
         let sorted = projects.values.sorted {
@@ -77,8 +84,8 @@ struct RunningGroup: Identifiable {
     }
 
     /// Dev servers, Compose stacks, Claude sessions, Services and Background, as the old Dev and Docker tabs did.
-    static func byType(servers: [Server], containers: [DockerContainer], claude: [ClaudeInstance]) -> [RunningGroup] {
-        var groups = [RunningGroup(id: "@servers", kind: .category, name: "Dev servers", servers: servers.filter { $0.kind == "app" })]
+    static func byType(servers: [Server], containers: [DockerContainer], claude: [ClaudeInstance], runs: [ManagedRun] = []) -> [RunningGroup] {
+        var groups = [RunningGroup(id: "@servers", kind: .category, name: "Dev servers", servers: servers.filter { $0.kind == "app" }, runs: runs)]
         let stacks = Dictionary(grouping: containers, by: \.composeProject).sorted { lhs, rhs in
             if lhs.key.isEmpty != rhs.key.isEmpty { return !lhs.key.isEmpty }
             return lhs.key < rhs.key
@@ -105,6 +112,7 @@ struct RunningGroup: Identifiable {
         group.servers = servers.filter { $0.matches(query: query) }
         group.containers = containers.filter { $0.matches(query: query) }
         group.claude = claude.filter { $0.project.matches(query: query) || $0.cwd.matches(query: query) }
+        group.runs = runs.filter { $0.name.matches(query: query) || $0.command.matches(query: query) || $0.package.matches(query: query) }
         return group.isEmpty ? nil : group
     }
 }
@@ -131,22 +139,27 @@ struct RunningTab: View {
 
     var body: some View {
         let claude = store.claudeInstances
+        let runs = store.runsWithoutServers()
         let all = store.grouping == .project
-            ? RunningGroup.byProject(servers: store.servers, containers: store.docker, claude: claude)
-            : RunningGroup.byType(servers: store.servers, containers: store.docker, claude: claude)
+            ? RunningGroup.byProject(servers: store.servers, containers: store.docker, claude: claude, runs: runs)
+            : RunningGroup.byType(servers: store.servers, containers: store.docker, claude: claude, runs: runs)
         let groups = all.compactMap { $0.filtered(by: store.query) }
 
         if all.isEmpty {
             EmptyState(
                 symbol: "moon.zzz",
                 title: "Nothing running",
-                message: "Dev servers in any language, Docker containers and Claude sessions show up here, grouped by project."
+                message: store.readyToRun.isEmpty
+                    ? "Dev servers in any language, Docker containers and Claude sessions show up here, grouped by project."
+                    : "Start a dev server from a recent project below, or from a terminal."
             )
+            ReadyToRunSection()
         } else if groups.isEmpty {
             VStack(spacing: 0) {
                 EmptyState(symbol: "magnifyingglass", title: "No matches for \u{201C}\(store.query)\u{201D}")
                 PillButton(title: "Clear filter") { store.query = "" }
             }
+            ReadyToRunSection()
         } else {
             ForEach(groups) { group in
                 let expanded = !store.query.isEmpty || !store.isCollapsed(group)
@@ -155,6 +168,7 @@ struct RunningTab: View {
                     GroupRows(group: group)
                 }
             }
+            ReadyToRunSection()
         }
     }
 }
@@ -169,6 +183,7 @@ private struct GroupRows: View {
         }
         ForEach(group.containers) { ContainerRow(container: $0) }
         ForEach(group.claude) { ClaudeInstanceRow(instance: $0, inGroup: inProject) }
+        ForEach(group.runs) { RunRow(run: $0, showProject: !inProject) }
     }
 }
 
@@ -289,6 +304,10 @@ private struct GroupMenuItems: View {
                 Button("New Claude Session") { Launcher.launchClaude(.new, in: root) }
             }
             Button("Copy Path") { Pasteboard.copy(root) }
+            if let project = store.runnable[root], !project.scripts.isEmpty {
+                Divider()
+                RunMenuItems(project: project)
+            }
             if let repo = store.worktreeRepo(containing: root) {
                 Divider()
                 Button("Worktrees (\(repo.worktrees.count))") { store.push(.worktrees(repo: repo.root, cleanup: false)) }
@@ -328,6 +347,7 @@ private struct BranchChip: View {
 
 struct ServerRow: View {
     @Environment(Store.self) private var store
+    @Environment(\.openWindow) private var openWindow
     let server: Server
     /// Show the project name, for rows outside a project group.
     var showProject = false
@@ -347,6 +367,7 @@ struct ServerRow: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
+                        if let run { ManagedChip(run: run) }
                         ForEach(server.ports.prefix(3), id: \.self) { PortChip(port: $0, url: server.url(for: $0).local) }
                         if server.ports.count > 3 {
                             Text("+\(server.ports.count - 3)").font(.system(size: 10)).foregroundStyle(.secondary)
@@ -371,14 +392,31 @@ struct ServerRow: View {
                     IconButton(symbol: "qrcode", help: "Open on your phone", action: showQRCode)
                 }
             }
-            IconButton(symbol: "chevron.left.forwardslash.chevron.right", help: "Open in editor") {
-                store.openInEditor(server.cwdFull)
-            }
-            ConfirmIconButton(symbol: "xmark.octagon", help: "Kill PID \(server.pid)", busy: store.isPending("pid-\(server.pid)")) {
-                store.kill(pid: server.pid, label: server.displayName)
+            if let run {
+                IconButton(symbol: "text.alignleft", help: "Show logs") { openLogs(run, openWindow) }
+                IconButton(symbol: "arrow.clockwise", help: "Restart \(run.title)") { store.restartRun(run) }
+                    .overlay { if store.isPending("run-\(run.id)") { ProgressView().controlSize(.mini) } }
+                ConfirmIconButton(symbol: "stop.circle", help: "Stop \(run.title) (\(run.command))", confirmLabel: "Stop?",
+                                  busy: store.isPending("run-\(run.id)")) {
+                    store.stopRun(run)
+                }
+            } else {
+                IconButton(symbol: "chevron.left.forwardslash.chevron.right", help: "Open in editor") {
+                    store.openInEditor(server.cwdFull)
+                }
+                ConfirmIconButton(symbol: "xmark.octagon", help: "Kill PID \(server.pid)", busy: store.isPending("pid-\(server.pid)")) {
+                    store.kill(pid: server.pid, label: server.displayName)
+                }
             }
         }
         .contextMenu {
+            if let run {
+                Button("Restart \(run.title)") { store.restartRun(run) }
+                Button("Stop \(run.title)") { store.stopRun(run) }
+                Button("Show Logs") { openLogs(run, openWindow) }
+                RestartOnCrashToggle(run: run)
+                Divider()
+            }
             ForEach(server.ports, id: \.self) { port in
                 let url = server.url(for: port)
                 Button("Open \(url.local.replacingOccurrences(of: "http://", with: ""))") { Launcher.openURL(url.local) }
@@ -402,6 +440,9 @@ struct ServerRow: View {
             }
         }
     }
+
+    /// The run devdash started this server in.
+    private var run: ManagedRun? { server.runId.flatMap(store.run(id:)) }
 
     private var subtitle: String {
         guard showProject else { return server.shortCommand }

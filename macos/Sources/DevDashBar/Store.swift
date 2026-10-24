@@ -51,6 +51,15 @@ enum Route: Hashable {
     case whatsNew
 }
 
+/// A run that didn't start because a process devdash didn't start holds its port.
+struct PendingConflict: Equatable {
+    let conflict: PortConflict
+    let root: String
+    let scriptId: String
+    let title: String
+    let projectName: String
+}
+
 struct Toast: Identifiable, Equatable {
     let id = UUID()
     let message: String
@@ -77,6 +86,10 @@ final class Store {
     private(set) var system: SystemStats?
     private(set) var node: [NodeProcess] = []
     private(set) var servers: [Server] = []
+    private(set) var runs: [ManagedRun] = []
+    /// What each project can run, by project root.
+    private(set) var runnable: [String: RunnableProject] = [:]
+    private(set) var portConflict: PendingConflict?
     private(set) var worktreeRepos: [WorktreeRepo] = []
     private(set) var worktreeSizes: [String: Int64] = [:]
     private(set) var projects: [String: ProjectInfo] = [:]
@@ -206,6 +219,10 @@ final class Store {
         node = snapshot.node
         servers = snapshot.servers ?? snapshot.node.map(Server.init(node:))
         if let worktrees = snapshot.worktrees { worktreeRepos = worktrees }
+        runs = snapshot.runs ?? []
+        if let runnable = snapshot.runnable {
+            self.runnable = Dictionary(runnable.map { ($0.root, $0) }, uniquingKeysWith: { a, _ in a })
+        }
         projects = Dictionary((snapshot.projects ?? []).map { ($0.root, $0) }, uniquingKeysWith: { a, _ in a })
         docker = snapshot.docker
         processes = snapshot.processes
@@ -221,7 +238,7 @@ final class Store {
         cpuHistory.append(snapshot.system.cpuPercent)
         if cpuHistory.count > 40 { cpuHistory.removeFirst(cpuHistory.count - 40) }
 
-        let events = tracker.diff(servers: servers, docker: snapshot.docker, watchedPorts: config.watchedPorts)
+        let events = tracker.diff(servers: servers, docker: snapshot.docker, runs: runs, watchedPorts: config.watchedPorts)
         if UserDefaults.standard.object(forKey: SettingsKey.notifications) as? Bool ?? true {
             Notifier.post(events)
         }
@@ -330,7 +347,9 @@ final class Store {
     /// Kills every server and stops every container of a Running group.
     func stopGroup(_ group: RunningGroup) {
         let key = "group-\(group.id)"
-        let targets = group.servers.filter { !$0.isBackground }
+        // Servers devdash started stop with their whole run, which also ends the script that started them.
+        let runIds = Set(group.servers.compactMap(\.runId) + group.runs.filter(\.isAlive).map(\.id))
+        let targets = group.servers.filter { !$0.isBackground && $0.runId == nil }
         pending.insert(key)
         targets.forEach { pending.insert("pid-\($0.pid)") }
         group.containers.forEach { pending.insert("ctr-\($0.containerId)") }
@@ -340,12 +359,17 @@ final class Store {
                 targets.forEach { pending.remove("pid-\($0.pid)") }
                 group.containers.forEach { pending.remove("ctr-\($0.containerId)") }
             }
+            var stoppedRuns = 0
+            for id in runIds where (try? await bridge.send("stop_run", ["run": id])) != nil { stoppedRuns += 1 }
             let items: [[String: Any]] = targets.map { ["action_type": "kill", "pid": $0.pid] }
                 + group.containers.map { ["action_type": "stop_container", "container_id": $0.containerId] }
             do {
-                let result = try await bridge.request("cleanup", ["items": items], as: CleanupResult.self)
-                let done = result.killed + result.stopped
-                showToast("Stopped \(done) of \(items.count) in \(group.name)", isError: result.failed > 0)
+                let result = items.isEmpty
+                    ? CleanupResult(killed: 0, stopped: 0, failed: 0)
+                    : try await bridge.request("cleanup", ["items": items], as: CleanupResult.self)
+                let done = result.killed + result.stopped + stoppedRuns
+                let total = items.count + runIds.count
+                showToast("Stopped \(done) of \(total) in \(group.name)", isError: result.failed > 0 || stoppedRuns < runIds.count)
             } catch {
                 showToast(error.localizedDescription, isError: true)
             }
@@ -377,6 +401,130 @@ final class Store {
                 let result = try await bridge.request("export", as: ExportResult.self)
                 showToast("Exported snapshot")
                 Launcher.revealInFinder(result.path)
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+        }
+    }
+
+    // MARK: Running scripts
+
+    /// Whether the bridge can start scripts (a devdash CLI from 0.7 on).
+    var canRun: Bool { !runnable.isEmpty }
+
+    func run(id: String) -> ManagedRun? { runs.first { $0.id == id } }
+
+    /// The run a script has, while it's running or waiting to restart.
+    func liveRun(root: String, scriptId: String) -> ManagedRun? {
+        runs.first { $0.projectRoot == root && $0.scriptId == scriptId && $0.isAlive }
+    }
+
+    /// Runs without a server row of their own: still starting, without a port (a worker), or ended.
+    func runsWithoutServers() -> [ManagedRun] {
+        let shown = Set(servers.compactMap(\.runId))
+        return runs.filter { !shown.contains($0.id) }
+    }
+
+    var crashedRuns: [ManagedRun] { runs.filter(\.isCrashed) }
+
+    /// Projects that can run something and have nothing on screen: the recent Claude projects.
+    var readyToRun: [RunnableProject] {
+        var busy = Set(servers.map(\.projectRoot))
+        busy.formUnion(docker.compactMap(\.projectRoot))
+        busy.formUnion(claudeInstances.compactMap(\.projectRoot))
+        busy.formUnion(runs.map(\.projectRoot))
+        return runnable.values
+            .filter { !busy.contains($0.root) && !$0.scripts.isEmpty }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Starts a script. With `stopping`, first stops the process that holds its port.
+    func run(_ script: RunScript, in project: RunnableProject, stopping pid: Int? = nil) {
+        start(root: project.root, scriptId: script.id, title: script.title, projectName: project.name, stopping: pid)
+    }
+
+    private func start(root: String, scriptId: String, title: String, projectName: String, stopping pid: Int? = nil) {
+        let key = "run-\(root)#\(scriptId)"
+        guard !pending.contains(key) else { return }
+        pending.insert(key)
+        Task {
+            defer { pending.remove(key) }
+            var args: [String: Any] = ["root": root, "script": scriptId]
+            if let pid { args["stop_pid"] = pid }
+            do {
+                let result = try await bridge.request("run_script", args, as: RunResult.self)
+                handle(result, root: root, scriptId: scriptId, title: title, projectName: projectName, verb: "Started")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+        }
+    }
+
+    private func handle(_ result: RunResult, root: String, scriptId: String, title: String, projectName: String, verb: String) {
+        if let conflict = result.conflict {
+            portConflict = PendingConflict(conflict: conflict, root: root, scriptId: scriptId, title: title, projectName: projectName)
+            showToast("Port \(conflict.port) is in use by \(conflict.label)", isError: true)
+        } else if let run = result.run {
+            if portConflict?.root == root && portConflict?.scriptId == scriptId { portConflict = nil }
+            runs.removeAll { $0.id == run.id }
+            runs.append(run)
+            showToast("\(verb) \(title) in \(projectName)")
+        }
+    }
+
+    /// Stops the process holding the port, then starts the run that wanted it.
+    func resolvePortConflict() {
+        guard let pending = portConflict else { return }
+        portConflict = nil
+        start(root: pending.root, scriptId: pending.scriptId, title: pending.title, projectName: pending.projectName,
+              stopping: pending.conflict.pid)
+    }
+
+    func dismissPortConflict() { portConflict = nil }
+
+    func stopRun(_ run: ManagedRun) {
+        let key = "run-\(run.id)"
+        pending.insert(key)
+        Task {
+            defer { pending.remove(key) }
+            do {
+                try await bridge.send("stop_run", ["run": run.id])
+                runs.removeAll { $0.id == run.id }
+                showToast("Stopped \(run.title) in \(run.projectName)")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+        }
+    }
+
+    func restartRun(_ run: ManagedRun) {
+        let key = "run-\(run.id)"
+        guard !pending.contains(key) else { return }
+        pending.insert(key)
+        Task {
+            defer { pending.remove(key) }
+            do {
+                let result = try await bridge.request("restart_run", ["run": run.id], as: RunResult.self)
+                handle(result, root: run.projectRoot, scriptId: run.scriptId, title: run.title, projectName: run.projectName,
+                       verb: run.isAlive ? "Restarted" : "Started")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+        }
+    }
+
+    /// Removes an ended run from the list.
+    func clearRun(_ run: ManagedRun) {
+        runs.removeAll { $0.id == run.id }
+        Task { try? await bridge.send("clear_run", ["run": run.id]) }
+    }
+
+    func setRestartOnCrash(_ run: ManagedRun, _ on: Bool) {
+        Task {
+            do {
+                let updated = try await bridge.request("restart_on_crash", ["run": run.id, "on": on], as: ManagedRun.self)
+                if let index = runs.firstIndex(where: { $0.id == updated.id }) { runs[index] = updated }
+                showToast(on ? "\(run.title) restarts when it crashes" : "\(run.title) stays down when it crashes")
             } catch {
                 showToast(error.localizedDescription, isError: true)
             }
@@ -483,11 +631,17 @@ final class Store {
     func focusSearch() { searchFocusRequest += 1 }
 
     func isCollapsed(_ group: RunningGroup) -> Bool {
-        toggledGroups.contains(group.id) ? !group.collapsedByDefault : group.collapsedByDefault
+        isCollapsed(id: group.id, byDefault: group.collapsedByDefault)
     }
 
-    func toggleCollapsed(_ group: RunningGroup) {
-        if toggledGroups.contains(group.id) { toggledGroups.remove(group.id) } else { toggledGroups.insert(group.id) }
+    func isCollapsed(id: String, byDefault: Bool) -> Bool {
+        toggledGroups.contains(id) ? !byDefault : byDefault
+    }
+
+    func toggleCollapsed(_ group: RunningGroup) { toggleCollapsed(id: group.id) }
+
+    func toggleCollapsed(id: String) {
+        if toggledGroups.contains(id) { toggledGroups.remove(id) } else { toggledGroups.insert(id) }
     }
 
     /// The welcome tour on a fresh install, or release notes for versions not seen yet.
@@ -537,19 +691,31 @@ struct ChangeTracker {
     private var initialized = false
     private var serverPorts: [Int: (name: String, ports: [Int])] = [:]
     private var containers: [String: String] = [:]
+    private var runStatuses: [String: String] = [:]
 
-    mutating func diff(servers: [Server], docker: [DockerContainer], watchedPorts: [Int]) -> [String] {
-        let apps = servers.filter { $0.kind == "app" }
+    mutating func diff(servers: [Server], docker: [DockerContainer], runs: [ManagedRun], watchedPorts: [Int]) -> [String] {
+        // Servers devdash started come and go on Run, Stop and Restart; their crashes are reported below.
+        let apps = servers.filter { $0.kind == "app" && !$0.isManaged }
         let currentPorts = Dictionary(apps.map { ($0.pid, (name: $0.reportName, ports: $0.ports)) }, uniquingKeysWith: { a, _ in a })
         let currentContainers = Dictionary(docker.map { ($0.containerId, $0.displayName) }, uniquingKeysWith: { a, _ in a })
+        let currentRuns = Dictionary(runs.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
         defer {
             serverPorts = currentPorts
             containers = currentContainers
+            runStatuses = currentRuns
             initialized = true
         }
         guard initialized else { return [] }
 
         var events: [String] = []
+        for run in runs where runStatuses[run.id] == "running" && run.status != "running" {
+            switch run.status {
+            case "restarting": events.append("\(run.title) crashed in \(run.projectName), restarting")
+            case "crashed" where run.gaveUp: events.append("\(run.title) in \(run.projectName) keeps crashing, stopped restarting it")
+            case "crashed": events.append("\(run.title) crashed in \(run.projectName) (exit code \(run.exitCode.map(String.init) ?? "?"))")
+            default: break
+            }
+        }
         for (pid, previous) in serverPorts where currentPorts[pid] == nil && !previous.ports.isEmpty {
             events.append("\(previous.name) on \(portList(previous.ports)) exited")
         }

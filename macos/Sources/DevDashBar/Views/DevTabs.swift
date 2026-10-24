@@ -2,8 +2,11 @@ import SwiftUI
 
 // MARK: - Docker
 
+/// A container's logs, or the log file of a run devdash started.
 struct LogTarget: Codable, Hashable {
-    let containerId: String
+    var containerId: String?
+    var file: String?
+    var runId: String?
     let name: String
 }
 

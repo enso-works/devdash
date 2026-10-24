@@ -8,7 +8,7 @@ struct AttentionItem: Identifiable, Equatable {
         static func < (lhs: Severity, rhs: Severity) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
-    enum Action { case retry, cleanup, disk, usage, whatsNew, worktrees }
+    enum Action: Equatable { case retry, cleanup, disk, usage, whatsNew, worktrees, runLogs(String), stopAndRun }
 
     let id: String
     let severity: Severity
@@ -60,6 +60,30 @@ enum Attention {
                 detail: "Build artifacts, caches and old files in the Disk tree",
                 actionTitle: "Open", action: .disk,
                 signature: "reclaim-\(disk.knownReclaimable / 1_073_741_824)"
+            ))
+        }
+
+        if let pending = store.portConflict {
+            let conflict = pending.conflict
+            let holder = conflict.project.isEmpty ? conflict.label : "\(conflict.label) in \(conflict.project)"
+            items.append(AttentionItem(
+                id: "conflict", severity: .warning, symbol: "exclamationmark.octagon",
+                title: "Port \(conflict.port) is held by \(holder)",
+                detail: "Stop PID \(conflict.pid) to run \(pending.title) in \(pending.projectName)",
+                actionTitle: "Stop and run", action: .stopAndRun
+            ))
+        }
+
+        for run in store.crashedRuns {
+            let code = run.exitCode.map { "Exit code \($0)" } ?? "Crashed"
+            items.append(AttentionItem(
+                id: "crash-\(run.id)", severity: .warning, symbol: "exclamationmark.triangle",
+                title: "\(run.title) crashed in \(run.projectName)",
+                detail: run.gaveUp
+                    ? "Crashed 3 times in 5 minutes, stopped restarting it"
+                    : "\(code), \(run.endDate.formatted(.relative(presentation: .named)))",
+                actionTitle: "Logs", action: .runLogs(run.id),
+                signature: String(run.ended)
             ))
         }
 
@@ -172,6 +196,9 @@ struct AttentionSection: View {
         case .usage: store.push(.usage)
         case .whatsNew: store.push(.whatsNew)
         case .worktrees: store.push(.worktrees(repo: nil, cleanup: true))
+        case .stopAndRun: store.resolvePortConflict()
+        case .runLogs(let id):
+            if let run = store.run(id: id) { openLogs(run, openWindow) }
         case .disk:
             openWindow(id: "disk")
             NSApp.activate(ignoringOtherApps: true)
@@ -180,7 +207,11 @@ struct AttentionSection: View {
 
     private func dismiss(_ item: AttentionItem) {
         withAnimation(.snappy(duration: 0.22)) {
-            if item.action == .whatsNew { store.markWhatsNewSeen() } else { store.dismiss(item) }
+            switch item.action {
+            case .whatsNew: store.markWhatsNewSeen()
+            case .stopAndRun: store.dismissPortConflict()
+            default: store.dismiss(item)
+            }
         }
     }
 }
