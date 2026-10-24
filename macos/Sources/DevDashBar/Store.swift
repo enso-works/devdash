@@ -40,6 +40,8 @@ enum Grouping: String, CaseIterable, Identifiable {
 enum Route: Hashable {
     case processDetail(pid: Int, name: String)
     case serverURL(pid: Int, port: Int)
+    /// All repositories, or one; `cleanup` shows only merged worktrees nothing runs in.
+    case worktrees(repo: String?, cleanup: Bool)
     case claudeProject(path: String)
     case cleanup
     case graph
@@ -75,6 +77,8 @@ final class Store {
     private(set) var system: SystemStats?
     private(set) var node: [NodeProcess] = []
     private(set) var servers: [Server] = []
+    private(set) var worktreeRepos: [WorktreeRepo] = []
+    private(set) var worktreeSizes: [String: Int64] = [:]
     private(set) var projects: [String: ProjectInfo] = [:]
     private(set) var docker: [DockerContainer] = []
     private(set) var processes: [GeneralProcess] = []
@@ -201,6 +205,7 @@ final class Store {
         system = snapshot.system
         node = snapshot.node
         servers = snapshot.servers ?? snapshot.node.map(Server.init(node:))
+        if let worktrees = snapshot.worktrees { worktreeRepos = worktrees }
         projects = Dictionary((snapshot.projects ?? []).map { ($0.root, $0) }, uniquingKeysWith: { a, _ in a })
         docker = snapshot.docker
         processes = snapshot.processes
@@ -372,6 +377,78 @@ final class Store {
                 let result = try await bridge.request("export", as: ExportResult.self)
                 showToast("Exported snapshot")
                 Launcher.revealInFinder(result.path)
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+        }
+    }
+
+    // MARK: Worktrees
+
+    /// The worktree a folder is in: the deepest match, since agent worktrees often live inside the
+    /// main checkout (`<repo>/.claude/worktrees/...`).
+    func worktree(containing path: String) -> Worktree? {
+        worktreeRepos.lazy.flatMap(\.worktrees)
+            .filter { path == $0.path || path.hasPrefix($0.path + "/") }
+            .max { $0.path.count < $1.path.count }
+    }
+
+    func repo(of worktree: Worktree) -> WorktreeRepo? {
+        worktreeRepos.first { $0.worktrees.contains(worktree) }
+    }
+
+    /// The repository a project root belongs to, when it has linked worktrees.
+    func worktreeRepo(containing root: String) -> WorktreeRepo? {
+        worktreeRepos.first { $0.worktrees.contains { $0.path == root } }
+    }
+
+    /// Dev servers and Claude sessions running inside a worktree.
+    func activity(in worktree: Worktree) -> (servers: [Server], sessions: [ClaudeInstance]) {
+        (servers.filter { self.worktree(containing: $0.cwdFull)?.path == worktree.path },
+         claudeInstances.filter { self.worktree(containing: $0.cwdFull)?.path == worktree.path })
+    }
+
+    func status(of worktree: Worktree) -> String {
+        let activity = activity(in: worktree)
+        return activity.servers.isEmpty && activity.sessions.isEmpty ? worktree.status : "running"
+    }
+
+    /// Merged worktrees with nothing running and no edits for a day: safe to remove.
+    var idleMergedWorktrees: [Worktree] {
+        let dayAgo = Date().addingTimeInterval(-86_400)
+        return worktreeRepos.flatMap(\.worktrees).filter { status(of: $0) == "merged" && $0.lastActivity < dayAgo }
+    }
+
+    func refreshWorktrees() {
+        Task { try? await bridge.send("refresh_worktrees") }
+    }
+
+    /// Sizes one at a time, since `du` over node_modules is slow and the bridge has few workers.
+    func loadSizes(for worktrees: [Worktree]) async {
+        for worktree in worktrees where !worktree.prunable && worktreeSizes[worktree.path] == nil {
+            // try? flattens the optional result, so null (du failed) and errors both skip.
+            guard let size = try? await bridge.request("worktree_size", ["path": worktree.path], as: Int64?.self) else { continue }
+            worktreeSizes[worktree.path] = size
+        }
+    }
+
+    func remove(_ worktree: Worktree, deleteBranch: Bool) {
+        let key = "wt-\(worktree.path)"
+        pending.insert(key)
+        Task {
+            defer { pending.remove(key) }
+            do {
+                let result = try await bridge.request(
+                    "remove_worktree", ["path": worktree.path, "delete_branch": deleteBranch], as: RemoveWorktreeResult.self
+                )
+                worktreeSizes[worktree.path] = nil
+                if result.branchDeleted {
+                    showToast("Removed \(worktree.folder) and branch \(result.branch)")
+                } else if deleteBranch, !result.note.isEmpty {
+                    showToast("Removed \(worktree.folder), kept branch \(result.branch) (\(result.note))")
+                } else {
+                    showToast("Removed \(worktree.folder)")
+                }
             } catch {
                 showToast(error.localizedDescription, isError: true)
             }

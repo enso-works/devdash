@@ -130,6 +130,46 @@ struct ServerURL: Decodable, Sendable, Hashable {
     let exposed: Bool
 }
 
+/// A repository with linked worktrees (devdash/worktrees.py).
+struct WorktreeRepo: Decodable, Sendable, Hashable, Identifiable {
+    let root: String
+    let name: String
+    let defaultBranch: String
+    let worktrees: [Worktree]
+
+    var id: String { root }
+}
+
+struct Worktree: Decodable, Sendable, Hashable, Identifiable {
+    let path: String
+    let branch: String
+    let head: String
+    let isMain: Bool
+    let locked: Bool
+    let prunable: Bool
+    let changes: Int
+    let merged: Bool
+    let upstreamGone: Bool
+    let lastCommit: Double
+    let subject: String
+    let lastTouched: Double
+    let createdBy: String
+    /// "missing", "changes", "merged", "stale" or "active". Store.status(of:) adds "running".
+    let status: String
+
+    var id: String { path }
+    var displayBranch: String { branch.isEmpty ? "detached at \(head)" : branch }
+    var folder: String { (path as NSString).lastPathComponent }
+    var lastActivity: Date { Date(timeIntervalSince1970: max(lastTouched, lastCommit)) }
+}
+
+struct RemoveWorktreeResult: Decodable, Sendable {
+    let path: String
+    let branch: String
+    let branchDeleted: Bool
+    let note: String
+}
+
 /// Name and git branch of a project root that appears in the snapshot.
 struct ProjectInfo: Decodable, Sendable, Hashable {
     let root: String
@@ -304,6 +344,8 @@ struct Snapshot: Decodable, Sendable {
     let node: [NodeProcess]
     let servers: [Server]?
     let projects: [ProjectInfo]?
+    /// Only sent when the worktree scan changed, about once a minute at most.
+    let worktrees: [WorktreeRepo]?
     let docker: [DockerContainer]
     let processes: [GeneralProcess]
     let cleanup: [CleanupSuggestion]

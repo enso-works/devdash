@@ -194,7 +194,7 @@ private struct GroupHeader: View {
                 .lineLimit(1)
                 .layoutPriority(1)
             if let root = group.root, let branch = store.projects[root]?.branch, !branch.isEmpty {
-                BranchChip(branch: branch)
+                BranchChip(branch: branch, worktree: store.worktree(containing: root).map { !$0.isMain } ?? false)
             }
             if let root = group.root {
                 Text(Format.shortPath(root))
@@ -289,6 +289,10 @@ private struct GroupMenuItems: View {
                 Button("New Claude Session") { Launcher.launchClaude(.new, in: root) }
             }
             Button("Copy Path") { Pasteboard.copy(root) }
+            if let repo = store.worktreeRepo(containing: root) {
+                Divider()
+                Button("Worktrees (\(repo.worktrees.count))") { store.push(.worktrees(repo: repo.root, cleanup: false)) }
+            }
         }
         if group.canStop {
             Divider()
@@ -299,10 +303,12 @@ private struct GroupMenuItems: View {
 
 private struct BranchChip: View {
     let branch: String
+    /// The project is a linked worktree rather than the main checkout.
+    var worktree = false
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: "arrow.triangle.branch").font(.system(size: 8.5, weight: .semibold))
+            Image(systemName: worktree ? "square.stack" : "arrow.triangle.branch").font(.system(size: 8.5, weight: .semibold))
             Text(branch)
                 .font(.system(size: 10, design: .monospaced))
                 .lineLimit(1)
@@ -314,6 +320,7 @@ private struct BranchChip: View {
         .padding(.horizontal, 5)
         .padding(.vertical, 1)
         .background(.primary.opacity(0.06), in: .capsule)
+        .help(worktree ? "Linked worktree on \(branch)" : "On \(branch)")
     }
 }
 

@@ -12,6 +12,7 @@ See and manage your dev servers, Docker containers and Claude Code sessions from
 
 - **Dev servers**: every process listening on a port, in any language (Node, Bun, Deno, Python, Ruby, Go, Rust and more), with its memory, CPU and the project it belongs to. Local databases such as Homebrew Postgres show up as services.
 - **Open on your phone**: each dev server's network URL and a QR code, so a phone on the same Wi-Fi opens it in one scan. Servers only this Mac can reach say so, with the flag that fixes it. See [Server URLs and QR codes](#server-urls-and-qr-codes).
+- **Git worktrees**: every linked worktree of the repositories you work in, such as the ones Claude Code creates, with uncommitted changes, merged branches and what runs in them. Remove the merged ones in one click. See [Worktrees](#worktrees).
 - **Docker**: containers grouped by Compose stack, with status, health and ports.
 - **Cleanup**: flags idle, orphaned and zombie processes and long-running containers, and lets you remove them in one click.
 - **Disk tree**: a treemap of your home folder that shows what takes up space and suggests what you can safely reclaim.
@@ -80,6 +81,7 @@ What you can do:
 - **Running**: dev servers, Docker containers and Claude sessions, grouped by project (the git repository they run in). Each project header shows the branch and has a menu to open the project in your editor, Finder or Terminal, start a Claude session there, or stop everything in it. Services, servers outside any project and Node processes without a port are grouped at the bottom. Choose **Type** next to the filter to group by dev servers, Compose stacks, Claude sessions, services and background processes instead.
   - Click a port chip to open `localhost:<port>` (https when the server speaks it), or Option-click to copy the URL. Hover a row to open it in your editor or kill it (click twice to confirm). Right-click any row for all its actions.
   - Click a server for process details: command, children, network connections, open files and environment. Click a container to stream its logs in a separate window, with filtering, follow mode and copy.
+- **Worktrees**: the footer button lists every linked git worktree, and Needs you shows merged ones nothing has touched for a day. See [Worktrees](#worktrees).
 - **Server URLs**: right-click a server for Copy URL, Copy Network URL and Show QR Code, or hover it and click the QR button. See [Server URLs and QR codes](#server-urls-and-qr-codes).
 - **System**: CPU, memory, disk, swap and network, the Disk tree summary, and the top processes sorted by memory or CPU. The header shows CPU and memory on every tab; click it to open this tab.
 - **Claude**:
@@ -104,6 +106,22 @@ To try a dev server on your phone, hover it in Running and click the QR button, 
 A phone can only reach a server that listens on all interfaces (`0.0.0.0` or `::`). Vite, Astro, uvicorn, Rails and many other dev servers listen on `localhost` by default, so the page says "Only this Mac can open it" and shows the flag for that server, such as `--host` for Vite or `--host 0.0.0.0` for uvicorn. If the code still doesn't open, check that the macOS firewall allows incoming connections for the server's runtime (System Settings > Network > Firewall).
 
 The network address is the Mac's private IPv4 address on Wi-Fi or Ethernet. VPN tunnels are skipped. More in [How to access localhost from your phone](https://bavrk.com/articles/access-localhost-from-phone).
+
+### Worktrees
+
+![Worktrees](screenshots/app/worktrees.png)
+
+Coding agents create a git worktree per task and rarely clean up after themselves. The Worktrees page (in the footer, or **Worktrees** in a project's menu) lists every linked worktree of the repositories devdash knows about: projects that have something running, and your Claude Code projects in every account. Repositories without linked worktrees are left out.
+
+Each worktree shows its branch, which tool created it (Claude Code worktrees get the Claude mark), when it was last touched, its size, and a status:
+
+- **Running**: a dev server or Claude session is running in it.
+- **Changes**: it has uncommitted or untracked files.
+- **Merged**: its branch is merged into the default branch (`origin/main` when there is a remote), or its remote branch is gone, which is what a squash merge on GitHub leaves behind.
+- **Stale**: untouched for a week.
+- **Active**: everything else.
+
+Remove a worktree from its row or right-click menu. devdash runs `git worktree remove`, then `git worktree prune`, and for merged branches `git branch -d`, which keeps a branch git doesn't consider merged (squash merges) and says so. It never forces anything: worktrees with changes, with something running in them, locked ones and the main checkout can't be removed from devdash. Merged worktrees nothing has touched for a day also appear under Needs you. More in [git worktree remove: clean up worktrees without --force](https://bavrk.com/articles/git-worktree-remove).
 
 ### Disk tree
 

@@ -318,3 +318,46 @@ def project_detail(path: str) -> dict:
         "memory_content": "# Memory\n\n- Checkout uses Stripe payment intents, not charges.\n- Run `pnpm test --filter web` before pushing.\n",
         "recent_sessions": [_session(i, *s) for i, s in enumerate(SESSIONS) if s[1] == name] or [_session(0, *SESSIONS[0])],
     }
+
+
+# repo, path (relative to ~), branch, changes, merged, upstream gone, days since touched, days since commit, subject, by
+WORKTREES = [
+    ("storefront", "code/storefront", "feat/checkout", 0, False, False, 0.01, 0.1, "Show the tax line in the cart", ""),
+    ("storefront", "code/storefront/.claude/worktrees/agent-3f9a1c", "claude/fix-cart-total", 3, False, False, 0.02, 0.2, "Round cart totals per line", "claude"),
+    ("storefront", "code/storefront/.claude/worktrees/agent-7b2e04", "claude/onboarding-copy", 0, True, True, 3, 3, "Tighten the onboarding copy", "claude"),
+    ("storefront", "code/storefront-search", "feat/search", 0, True, False, 9, 11, "Search with typo tolerance", ""),
+    ("storefront", "conductor/workspaces/storefront/lisbon", "demo/lisbon", 0, False, False, 12, 14, "Try a sticky checkout bar", "conductor"),
+    ("analytics", "code/analytics", "perf/events", 0, False, False, 0.05, 0.3, "Batch event inserts", ""),
+    ("analytics", "code/analytics/.claude/worktrees/agent-c41d2e", "claude/clickhouse-ttl", 0, True, True, 2, 2, "Add a TTL to raw events", "claude"),
+]
+WORKTREE_SIZES = [412, 1830, 1460, 2210, 980, 96, 120]  # MB
+
+
+def worktrees() -> list[dict]:
+    now = time.time()
+    repos: dict[str, dict] = {}
+    for i, (repo, path, branch, changes, merged, gone, touched, committed, subject, by) in enumerate(WORKTREES):
+        entry = repos.setdefault(repo, {"root": f"{HOME}/{path}", "name": repo, "default_branch": "origin/main", "worktrees": []})
+        is_main = not entry["worktrees"]
+        if changes:
+            status = "changes"
+        elif merged:
+            status = "merged"
+        elif touched > 7:
+            status = "stale"
+        else:
+            status = "active"
+        entry["worktrees"].append({
+            "path": f"{HOME}/{path}", "branch": branch, "head": f"{0x3a7f21c + i * 7919:07x}"[:7], "is_main": is_main,
+            "locked": False, "prunable": False, "changes": changes, "merged": merged, "upstream_gone": gone,
+            "last_commit": now - committed * 86400, "subject": subject, "last_touched": now - touched * 86400,
+            "created_by": by, "status": status,
+        })
+    return list(repos.values())
+
+
+def worktree_size(path: str) -> int | None:
+    for (_, rel, *_), mb in zip(WORKTREES, WORKTREE_SIZES):
+        if path == f"{HOME}/{rel}":
+            return mb * 1024 * 1024
+    return None
