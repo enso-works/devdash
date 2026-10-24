@@ -129,7 +129,7 @@ Scripts run in your login shell's environment, so nvm, fnm, mise and asdf pick t
 
 Right-click a server devdash started and choose **Restart When It Crashes** to have devdash bring it back 2 seconds after it exits with an error, at most 3 times in 5 minutes. A crash also shows up in Needs you with its exit code and a link to the logs. Runs that have no port yet, such as workers, and runs that ended stay in their project with their status until you remove them.
 
-Before a run starts, devdash checks the ports it used last time (and any `--port`, `-p` or `PORT=` in the script). When another process holds one, the run doesn't start and Needs you says which process it is, with **Stop and run**. devdash never stops a process you didn't ask it to.
+Before a run starts, devdash checks the ports it used last time (and any `--port`, `-p` or `PORT=` in the script). When another process holds one, the run doesn't start and Needs you says which process it is, with **Stop and run**. devdash never stops a process you didn't ask it to. More in [Kill the process on a port on Mac](https://bavrk.com/articles/kill-process-on-port).
 
 Servers keep running when you quit the menu bar app, like servers started in a terminal. devdash picks them up again on the next launch, but can only restart a crashed server while it's running.
 
