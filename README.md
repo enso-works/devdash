@@ -12,6 +12,7 @@ See and manage your dev servers, Docker containers and Claude Code sessions from
 
 - **Dev servers**: every process listening on a port, in any language (Node, Bun, Deno, Python, Ruby, Go, Rust and more), with its memory, CPU and the project it belongs to. Local databases such as Homebrew Postgres show up as services.
 - **Open on your phone**: each dev server's network URL and a QR code, so a phone on the same Wi-Fi opens it in one scan. Servers only this Mac can reach say so, with the flag that fixes it. See [Server URLs and QR codes](#server-urls-and-qr-codes).
+- **Run dev servers**: start any package.json script or Procfile entry from the menu bar, then restart, stop and read its logs there. Optional restart on crash, and a warning when another process holds the port. See [Running dev servers](#running-dev-servers).
 - **Git worktrees**: every linked worktree of the repositories you work in, such as the ones Claude Code creates, with uncommitted changes, merged branches and what runs in them. Remove the merged ones in one click. See [Worktrees](#worktrees).
 - **Docker**: containers grouped by Compose stack, with status, health and ports.
 - **Cleanup**: flags idle, orphaned and zombie processes and long-running containers, and lets you remove them in one click.
@@ -81,6 +82,7 @@ What you can do:
 - **Running**: dev servers, Docker containers and Claude sessions, grouped by project (the git repository they run in). Each project header shows the branch and has a menu to open the project in your editor, Finder or Terminal, start a Claude session there, or stop everything in it. Services, servers outside any project and Node processes without a port are grouped at the bottom. Choose **Type** next to the filter to group by dev servers, Compose stacks, Claude sessions, services and background processes instead.
   - Click a port chip to open `localhost:<port>` (https when the server speaks it), or Option-click to copy the URL. Hover a row to open it in your editor or kill it (click twice to confirm). Right-click any row for all its actions.
   - Click a server for process details: command, children, network connections, open files and environment. Click a container to stream its logs in a separate window, with filtering, follow mode and copy.
+- **Run dev servers**: **Run dev** and a **Run** submenu in every project's menu, and recent projects under **Ready to run**. See [Running dev servers](#running-dev-servers).
 - **Worktrees**: the footer button lists every linked git worktree, and Needs you shows merged ones nothing has touched for a day. See [Worktrees](#worktrees).
 - **Server URLs**: right-click a server for Copy URL, Copy Network URL and Show QR Code, or hover it and click the QR button. See [Server URLs and QR codes](#server-urls-and-qr-codes).
 - **System**: CPU, memory, disk, swap and network, the Disk tree summary, and the top processes sorted by memory or CPU. The header shows CPU and memory on every tab; click it to open this tab.
@@ -92,7 +94,7 @@ What you can do:
 - **Footer**: Disk tree, dependency graph and activity heatmap. The `...` menu has JSON export, the terminal UI, What's new, Check for updates and Quit.
 - **Keep awake**: the cup in the header. While it's on, the Mac doesn't sleep, and after 50 seconds without input devdash moves the cursor one point and back, too fast to see, so Teams and Slack keep you active. Moving the cursor needs Accessibility access, which macOS asks for the first time you turn it on; without it only the sleep prevention works. It stays on across restarts. More in [Mouse jiggler for Mac](https://bavrk.com/articles/mouse-jiggler-for-mac).
 - **Keyboard**: Cmd+1 to Cmd+3 switch tabs, Cmd+F filters, Esc clears the filter.
-- **Notifications**: a macOS notification when a dev server starts or exits, a container stops, or a watched port comes up.
+- **Notifications**: a macOS notification when a dev server starts or exits, a container stops, a watched port comes up, or a server devdash started crashes.
 - **Settings**: launch at login, editor (VS Code or Cursor), whether the menu bar shows the count and usage percentage, notifications, and a custom `devdash` path.
 
 ### Server URLs and QR codes
@@ -106,6 +108,28 @@ To try a dev server on your phone, hover it in Running and click the QR button, 
 A phone can only reach a server that listens on all interfaces (`0.0.0.0` or `::`). Vite, Astro, uvicorn, Rails and many other dev servers listen on `localhost` by default, so the page says "Only this Mac can open it" and shows the flag for that server, such as `--host` for Vite or `--host 0.0.0.0` for uvicorn. If the code still doesn't open, check that the macOS firewall allows incoming connections for the server's runtime (System Settings > Network > Firewall).
 
 The network address is the Mac's private IPv4 address on Wi-Fi or Ethernet. VPN tunnels are skipped. More in [How to access localhost from your phone](https://bavrk.com/articles/access-localhost-from-phone).
+
+### Running dev servers
+
+| Ready to run | Logs |
+|---|---|
+| ![Recent projects with a play button](screenshots/app/ready.png) | ![The logs window of a server devdash started](screenshots/app/logs.png) |
+
+Every project in Running has **Run dev** in its menu (the `...` on its header, or right-click), plus a **Run** submenu with everything it can run:
+
+- the scripts in its `package.json`, run with the package manager its lockfile or `packageManager` field names (npm, pnpm, yarn or bun);
+- the `dev`, `start`, `serve` and `preview` scripts of its workspace packages (`workspaces` in package.json, or `pnpm-workspace.yaml`);
+- the entries of `Procfile.dev`, or `Procfile` when there is no `Procfile.dev`.
+
+**Run dev** starts the script you ran last in that project, or else the first of `dev`, `start`, `serve` and `preview`. Recent Claude Code projects with nothing running are listed under **Ready to run** at the bottom of Running, with a play button.
+
+Scripts run in your login shell's environment, so nvm, fnm, mise and asdf pick the same Node or Python as in a terminal. A server devdash started gets a chip with the script name and three buttons: **Restart**, **Stop** and **Logs**. Stop sends SIGTERM to the script's whole process group and SIGKILL after 5 seconds, so the servers `npm run dev` or turbo started stop too. The output goes to `~/.local/share/devdash/runs/<project>/<script>.log`, which devdash keeps under 5 MB, and the logs window follows it with a filter.
+
+Right-click a server devdash started and choose **Restart When It Crashes** to have devdash bring it back 2 seconds after it exits with an error, at most 3 times in 5 minutes. A crash also shows up in Needs you with its exit code and a link to the logs. Runs that have no port yet, such as workers, and runs that ended stay in their project with their status until you remove them.
+
+Before a run starts, devdash checks the ports it used last time (and any `--port`, `-p` or `PORT=` in the script). When another process holds one, the run doesn't start and Needs you says which process it is, with **Stop and run**. devdash never stops a process you didn't ask it to.
+
+Servers keep running when you quit the menu bar app, like servers started in a terminal. devdash picks them up again on the next launch, but can only restart a crashed server while it's running.
 
 ### Worktrees
 
@@ -352,6 +376,11 @@ devdash/
   processes.py     # process, Docker, system and Claude Code data collection
   claude_usage.py  # plan limits and API-equivalent cost from transcripts
   claude_profiles.py # Claude Code profiles from ~/.config/claude-profiles
+  servers.py       # dev servers in any language and the project each belongs to
+  network.py       # LAN address and the network URL of each server
+  worktrees.py     # git worktrees across repositories, and removing them safely
+  runnable.py      # package.json scripts and Procfile entries a project can run
+  supervisor.py    # dev servers devdash starts: restart, stop, logs, restart on crash
   bridge.py        # JSON-lines bridge for the menu bar app (--serve)
   demo.py          # synthetic data for --demo and screenshots
   cli.py           # command-line entry point

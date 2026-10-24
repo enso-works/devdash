@@ -14,6 +14,14 @@ enum WhatsNew {
     }
 
     static let releases: [Release] = [
+        Release(version: "0.7.0", entries: [
+            Entry(symbol: "play.fill", title: "Run dev servers",
+                  detail: "Run dev, or any package.json script or Procfile entry, from a project's menu. Recent projects wait under Ready to run."),
+            Entry(symbol: "arrow.clockwise", title: "Restart, stop and logs",
+                  detail: "Servers devdash started get Restart, Stop and Logs, and can restart on their own when they crash."),
+            Entry(symbol: "exclamationmark.triangle", title: "Crashes and busy ports",
+                  detail: "A crash or a port held by another process shows up in Needs you, with the logs or a Stop and run button."),
+        ]),
         Release(version: "0.6.0", entries: [
             Entry(symbol: "arrow.triangle.branch", title: "Worktrees",
                   detail: "Every git worktree of your repositories, with changes, merged branches and what runs in them. Open it from the footer."),

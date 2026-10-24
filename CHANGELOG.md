@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+- **Run dev servers**: a project's menu in Running has **Run dev** (the script you ran last, else `dev`, `start`, `serve` or `preview`) and a **Run** submenu with every package.json script, the dev scripts of workspace packages and the entries of `Procfile.dev` or `Procfile`. The package manager comes from the lockfile or the `packageManager` field.
+- **Ready to run**: recent Claude Code projects with nothing running are listed at the bottom of Running, each with a play button.
+- Servers devdash started get a chip with the script name, and Restart, Stop and Logs buttons. Stop ends the script's whole process group, so the servers `npm run dev` or turbo started stop with it.
+- **Logs**: output goes to `~/.local/share/devdash/runs/<project>/<script>.log` (kept under 5 MB) and opens in the logs window, with filter, follow, Restart and Stop.
+- **Restart when it crashes**, per server, off by default: restarts after 2 seconds, at most 3 times in 5 minutes.
+- A crash shows up in Needs you with the exit code and a notification. Runs without a port (workers, watchers) and runs that ended keep a row in their project.
+- When a port the script used last time is held by another process, the run doesn't start; Needs you names the process and offers **Stop and run**.
+- Servers keep running when the menu bar app quits, like servers started in a terminal, and devdash picks them up again on the next launch.
+- `devdash --serve` sends `runs`, `runnable` (when it changes) and each server's `run_id`, and has `run_script`, `stop_run`, `restart_run`, `clear_run` and `restart_on_crash` commands.
+
+### Changed
+- Stop All in a project stops the runs devdash started as a whole.
+- Notifications for servers devdash started are about crashes only, not every start and stop.
+
 ## 0.6.0
 
 ### Added
