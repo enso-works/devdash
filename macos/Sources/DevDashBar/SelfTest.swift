@@ -46,6 +46,7 @@ enum SelfTest {
             print("FAIL no snapshot received")
             return 1
         }
+        print("ok   runs=\(snapshot.runs?.count ?? -1) runnable=\(snapshot.runnable?.count ?? -1)")
         print("ok   snapshot node=\(snapshot.node.count) docker=\(snapshot.docker.count) procs=\(snapshot.processes.count) cleanup=\(snapshot.cleanup.count) claude=\(claudeSeen)")
 
         var failures = 0
@@ -207,14 +208,40 @@ enum Renderer {
             ("qrcode", { store.routes = urlRoute(store) { $0.primaryURL?.lan != nil } }),
             ("worktrees", { store.routes = [.worktrees(repo: nil, cleanup: false)] }),
             ("qrcode-localhost", { store.routes = urlRoute(store) { $0.exposeHint?.hasPrefix("Restart") == true } }),
+            // A crashed run without a server row, in its project.
+            ("run-crashed", {
+                store.routes = []
+                toggleProjects(store)
+                if let run = store.crashedRuns.first { store.toggleCollapsed(id: run.projectRoot) }
+            }),
         ]
         for (name, apply) in screens {
             apply()
             try? await Task.sleep(for: .milliseconds(1500))
             capture(panel, to: dir.appendingPathComponent("\(name).png"))
         }
+        toggleProjects(store)
+        if let run = store.crashedRuns.first { store.toggleCollapsed(id: run.projectRoot) }
         store.routes = []
         store.tab = .running
+
+        // Ready to run sits at the bottom, so this one gets its own store with Needs you dismissed.
+        let readyStore = Store()
+        await waitForData(readyStore)
+        toggleProjects(readyStore)
+        readyStore.toggleCollapsed(id: ReadyToRunSection.id)
+        Attention.items(store: readyStore, disk: disk).forEach(readyStore.dismiss)
+        let readyPanel = host(PanelFrame { PopoverView().environment(readyStore).environment(disk) }, size: PanelFrame<EmptyView>.size)
+        try? await Task.sleep(for: .milliseconds(1500))
+        capture(readyPanel, to: dir.appendingPathComponent("ready.png"))
+        readyStore.shutdown()
+
+        if let run = store.runs.first(where: \.isAlive) {
+            let target = LogTarget(file: run.log, runId: run.id, name: "\(run.title) · \(run.projectName)")
+            let logs = host(LogsView(target: target).environment(store).background(.background), size: CGSize(width: 760, height: 420))
+            try? await Task.sleep(for: .milliseconds(1500))
+            capture(logs, to: dir.appendingPathComponent("logs.png"))
+        }
 
         let claudeStore = Store()
         let usageStore = Store()
