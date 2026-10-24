@@ -68,8 +68,8 @@ enum Attention {
             let holder = conflict.project.isEmpty ? conflict.label : "\(conflict.label) in \(conflict.project)"
             items.append(AttentionItem(
                 id: "conflict", severity: .warning, symbol: "exclamationmark.octagon",
-                title: "Port \(conflict.port) is held by \(holder)",
-                detail: "Stop PID \(conflict.pid) to run \(pending.title) in \(pending.projectName)",
+                title: "\(pending.title) in \(pending.projectName) can't use port \(conflict.port)",
+                detail: "\(holder) holds it, PID \(conflict.pid)",
                 actionTitle: "Stop and run", action: .stopAndRun
             ))
         }

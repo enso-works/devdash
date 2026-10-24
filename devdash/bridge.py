@@ -715,6 +715,9 @@ class DemoBridge(Bridge):
         found = next((s for s in (entry or {}).get("scripts", []) if s["id"] == script), None)
         if entry is None or found is None:
             raise RuntimeError(f"No script {script} in {root}")
+        if entry["name"] == "admin" and not cmd.get("stop_pid"):
+            # Shows the port check: admin's dev server wants the port storefront's Next.js holds.
+            return {"run": None, "conflict": {"port": 3000, "pid": 41822, "label": "next dev", "project": "storefront"}}
         return {"run": {
             "id": f"{root}#{script}", "project_root": root, "project_name": entry["name"], "script_id": script,
             "name": found["name"], "command": found["command"], "cwd": found["cwd"], "package": found["package"],

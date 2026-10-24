@@ -236,6 +236,14 @@ enum Renderer {
         capture(readyPanel, to: dir.appendingPathComponent("ready.png"))
         readyStore.shutdown()
 
+        // Running admin's dev server, whose port another project's server holds (demo data).
+        if let admin = store.readyToRun.first(where: { $0.name == "admin" }), let script = admin.defaultScript {
+            store.run(script, in: admin)
+            try? await Task.sleep(for: .milliseconds(3500))  // after the toast
+            capture(panel, to: dir.appendingPathComponent("port-conflict.png"))
+            store.dismissPortConflict()
+        }
+
         if let run = store.runs.first(where: \.isAlive) {
             let target = LogTarget(file: run.log, runId: run.id, name: "\(run.title) · \(run.projectName)")
             let logs = host(LogsView(target: target).environment(store).background(.background), size: CGSize(width: 760, height: 420))

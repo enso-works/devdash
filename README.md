@@ -111,9 +111,11 @@ The network address is the Mac's private IPv4 address on Wi-Fi or Ethernet. VPN 
 
 ### Running dev servers
 
-| Ready to run | Logs |
+| Ready to run | Port in use |
 |---|---|
-| ![Recent projects with a play button](screenshots/app/ready.png) | ![The logs window of a server devdash started](screenshots/app/logs.png) |
+| ![Recent projects with a play button](screenshots/app/ready.png) | ![Needs you offering to stop the process that holds the port](screenshots/app/port-conflict.png) |
+
+![The logs window of a server devdash started](screenshots/app/logs.png)
 
 Every project in Running has **Run dev** in its menu (the `...` on its header, or right-click), plus a **Run** submenu with everything it can run:
 
