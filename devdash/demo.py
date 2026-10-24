@@ -119,6 +119,7 @@ def servers() -> list[dict]:
             "expose_hint": next(
                 (expose_hint(label, command, port) for port in ports if port in LOOPBACK_ONLY), ""
             ),
+            "run_id": MANAGED_PIDS.get(pid),
         })
     return result
 
@@ -361,3 +362,115 @@ def worktree_size(path: str) -> int | None:
         if path == f"{HOME}/{rel}":
             return mb * 1024 * 1024
     return None
+
+
+# -- managed runs --------------------------------------------------------------
+
+# Runs devdash started: storefront's `pnpm run dev` (turbo, which starts web and api) and a crashed worker.
+RUN_LOG_DIR = "/tmp/devdash-demo-runs"
+STOREFRONT_RUN = f"{HOME}/code/storefront#dev"
+WORKER_RUN = f"{HOME}/code/analytics#Procfile.dev:worker"
+MANAGED_PIDS = {41822: STOREFRONT_RUN, 41907: STOREFRONT_RUN}
+
+RUN_LOGS = {
+    "storefront-dev.log": """
+--- devdash: pnpm run dev in /Users/demo/code/storefront at 2026-10-24 09:12:03 ---
+
+> storefront@0.0.0 dev /Users/demo/code/storefront
+> turbo dev
+
+• Packages in scope: api, ui, web
+• Running dev in 3 packages
+api:dev: > node --watch src/server.ts
+web:dev: > next dev --turbo
+web:dev:    ▲ Next.js 16.0.1 (Turbopack)
+web:dev:    - Local:        http://localhost:3000
+web:dev:    - Network:      http://192.168.1.24:3000
+web:dev:  ✓ Ready in 1.2s
+api:dev: Listening on http://localhost:4000
+api:dev: GET /health 200 2ms
+web:dev:  ○ Compiling /checkout ...
+web:dev:  ✓ Compiled /checkout in 840ms
+web:dev:  GET /checkout 200 in 912ms
+api:dev: POST /cart/items 201 14ms
+api:dev: warn: slow query on carts (212ms)
+web:dev:  GET /api/cart 200 in 38ms
+""",
+    "analytics-worker.log": """
+--- devdash: celery -A app.worker worker --loglevel=info in /Users/demo/code/analytics at 2026-10-24 10:41:17 ---
+[2026-10-24 10:41:19,204: INFO/MainProcess] Connected to redis://localhost:6379/0
+[2026-10-24 10:41:19,231: INFO/MainProcess] celery@demo ready.
+[2026-10-24 10:52:03,118: INFO/MainProcess] Task app.tasks.rollup_events received
+[2026-10-24 10:52:04,902: ERROR/ForkPoolWorker-1] Task app.tasks.rollup_events raised unexpected: ConnectionRefusedError(61, 'Connection refused')
+Traceback (most recent call last):
+  File "/Users/demo/code/analytics/app/tasks.py", line 48, in rollup_events
+    client.execute(ROLLUP_SQL)
+ConnectionRefusedError: [Errno 61] Connection refused
+[2026-10-24 10:52:05,011: CRITICAL/MainProcess] Unrecoverable error: ClickHouse at localhost:8123 is unreachable
+""",
+}
+
+
+def write_run_logs() -> None:
+    import os
+    os.makedirs(RUN_LOG_DIR, exist_ok=True)
+    for name, text in RUN_LOGS.items():
+        with open(os.path.join(RUN_LOG_DIR, name), "w", encoding="utf-8") as f:
+            f.write(text.lstrip("\n"))
+
+
+def runs() -> list[dict]:
+    now = _START  # fixed, so a dismissed crash stays dismissed
+    return [
+        {
+            "id": STOREFRONT_RUN, "project_root": f"{HOME}/code/storefront", "project_name": "storefront",
+            "script_id": "dev", "name": "dev", "command": "pnpm run dev", "cwd": f"{HOME}/code/storefront",
+            "package": "", "log": f"{RUN_LOG_DIR}/storefront-dev.log", "pid": 41800, "started": now - 8040,
+            "status": "running", "exit_code": None, "ended": 0.0, "restart_on_crash": True, "restarts": [],
+            "gave_up": False, "ports": [3000, 4000],
+        },
+        {
+            "id": WORKER_RUN, "project_root": f"{HOME}/code/analytics", "project_name": "analytics",
+            "script_id": "Procfile.dev:worker", "name": "worker", "command": "celery -A app.worker worker --loglevel=info",
+            "cwd": f"{HOME}/code/analytics", "package": "", "log": f"{RUN_LOG_DIR}/analytics-worker.log",
+            "pid": 61520, "started": now - 1100, "status": "crashed", "exit_code": 1, "ended": now - 240,
+            "restart_on_crash": False, "restarts": [], "gave_up": False, "ports": [],
+        },
+    ]
+
+
+def _scripts(root: str, manager: str, names: list[str], cwd: str = "", package: str = "") -> list[dict]:
+    rel = cwd.removeprefix(root).strip("/") if cwd else ""
+    return [
+        {"id": f"{rel}:{n}" if rel else n, "name": n, "command": f"{manager} run {n}", "source": "package.json",
+         "cwd": cwd or root, "package": package}
+        for n in names
+    ]
+
+
+def runnable() -> list[dict]:
+    code = f"{HOME}/code"
+    sf = f"{code}/storefront"
+    analytics_procfile = [
+        {"id": f"Procfile.dev:{name}", "name": name, "command": command, "source": "Procfile.dev",
+         "cwd": f"{code}/analytics", "package": ""}
+        for name, command in (
+            ("web", "uvicorn app.main:app --reload --port 8000"),
+            ("worker", "celery -A app.worker worker --loglevel=info"),
+        )
+    ]
+    entries = [
+        (sf, "storefront", _scripts(sf, "pnpm", ["dev", "start", "build", "lint", "test", "db:migrate"])
+            + _scripts(sf, "pnpm", ["dev", "start"], f"{sf}/apps/web", "web")
+            + _scripts(sf, "pnpm", ["dev"], f"{sf}/apps/api", "api"), "dev", False),
+        (f"{code}/design-system", "design-system", _scripts(f"{code}/design-system", "npm", ["storybook", "build", "test"]), "storybook", False),
+        (f"{code}/docs", "docs", _scripts(f"{code}/docs", "pnpm", ["dev", "preview", "build"]), "dev", False),
+        (f"{code}/analytics", "analytics", analytics_procfile, "Procfile.dev:web", False),
+        (f"{code}/mobile-app", "mobile-app", _scripts(f"{code}/mobile-app", "bun", ["start", "ios", "android", "web", "lint"]), "start", True),
+        (f"{code}/marketing-site", "marketing-site", _scripts(f"{code}/marketing-site", "pnpm", ["dev", "preview", "build"]), "dev", True),
+        (f"{code}/admin", "admin", _scripts(f"{code}/admin", "yarn", ["dev", "build", "test"]), "dev", True),
+    ]
+    return [
+        {"root": root, "name": name, "scripts": scripts, "default": default, "recent": recent}
+        for root, name, scripts, default, recent in entries
+    ]

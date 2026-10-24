@@ -41,11 +41,13 @@ from devdash.processes import (
 )
 from devdash.network import lan_ip
 from devdash.servers import get_servers, project_infos, resolve_project
-from devdash import worktrees
+from devdash.supervisor import PortConflict, Supervisor, shell_env
+from devdash import runnable, worktrees
 
 CLAUDE_REFRESH_EVERY = 5  # ticks
 USAGE_REFRESH_SECONDS = 30.0
 WORKTREES_REFRESH_SECONDS = 60.0
+RECENT_PROJECTS = 10  # per Claude profile, offered under "Ready to run"
 
 
 def _asdict(obj):
@@ -95,6 +97,15 @@ class Bridge:
         self._worktrees_payload: list | None = None
         self._worktrees_version = 0
         self._worktrees_sent = 0
+        self._supervisor = self._create_supervisor()
+        self._servers: list[dict] = []  # last snapshot's servers, to check ports before a run
+        self._recent_roots: set[str] = set()
+        self._runnable_payload: list | None = None
+        self._runnable_version = 0
+        self._runnable_sent = 0
+
+    def _create_supervisor(self) -> Supervisor | None:
+        return Supervisor(on_change=self._wake.set)
 
     # -- output --------------------------------------------------------------
 
@@ -123,6 +134,8 @@ class Bridge:
         if self._usage_enabled:
             threading.Thread(target=self._usage_loop, daemon=True).start()
         threading.Thread(target=self._worktrees_loop, daemon=True).start()
+        if self._supervisor is not None:
+            threading.Thread(target=shell_env, daemon=True).start()  # takes a second or two, so read it early
         time.sleep(0.5)
         while not self._stop.is_set():
             try:
@@ -172,19 +185,29 @@ class Bridge:
         docker_ports = {port for c in docker for port in _parse_host_ports_from_string(c.ports)}
         servers = get_servers({p.pid for p in node_procs}, docker_ports)
 
+        server_dicts = [_asdict(s) for s in servers]
+        if self._supervisor is not None:
+            self._supervisor.poll(server_dicts)
+            for d in server_dicts:
+                d["run_id"] = self._supervisor.run_for_pid(d["pid"])
+
         docker_dicts = [_with_project(_asdict(c), c.compose_working_dir) for c in docker]
         claude = self._claude_payload() if self._has_claude and self._tick % CLAUDE_REFRESH_EVERY == 0 else None
         roots = {s.project_root for s in servers} | {d["project_root"] for d in docker_dicts} | self._claude_roots
         with self._state_lock:
             self._snapshot_roots = roots - {""}
             self._busy_cwds = [s.cwd_full for s in servers] + list(self._claude_cwds)
+            self._servers = server_dicts
+        if self._tick % CLAUDE_REFRESH_EVERY == 0:
+            self._refresh_runnable()
 
         snapshot = {
             "type": "snapshot",
             "timestamp": time.time(),
             "system": _asdict(stats),
             "node": node,
-            "servers": [_asdict(s) for s in servers],
+            "servers": server_dicts,
+            "runs": self._supervisor.payload() if self._supervisor is not None else [],
             "lan_ip": lan_ip(),
             "projects": project_infos(roots - {""}),
             "docker": docker_dicts,
@@ -201,6 +224,9 @@ class Bridge:
             if self._worktrees_version != self._worktrees_sent:
                 snapshot["worktrees"] = self._worktrees_payload
                 self._worktrees_sent = self._worktrees_version
+            if self._runnable_version != self._runnable_sent:
+                snapshot["runnable"] = self._runnable_payload
+                self._runnable_sent = self._runnable_version
         self._tick += 1
         return snapshot
 
@@ -242,15 +268,21 @@ class Bridge:
     # -- worktrees -----------------------------------------------------------
 
     def _worktree_candidates(self) -> set[str]:
-        """Folders to look for repositories in: projects on screen, and the Claude projects of every profile."""
+        """Folders to look for repositories in: projects on screen, and the Claude projects of every
+        profile. Also notes the most recent Claude projects, which are offered under "Ready to run"."""
         with self._state_lock:
             paths = set(self._snapshot_roots)
+        recent: set[str] = set()
         for profile in self._profiles.profiles:
             if profile.dir.is_dir():
                 try:
-                    paths |= {p.path for p in get_claude_projects(profile.dir)}
+                    projects = get_claude_projects(profile.dir)
                 except Exception:
-                    pass
+                    continue
+                paths |= {p.path for p in projects}
+                recent |= {p.path for p in projects[:RECENT_PROJECTS]}
+        with self._state_lock:
+            self._recent_roots = {root for root in (resolve_project(p).root for p in recent) if root}
         return paths
 
     def _refresh_worktrees(self) -> None:
@@ -265,6 +297,7 @@ class Bridge:
         while not self._stop.is_set():
             try:
                 self._refresh_worktrees()
+                self._refresh_runnable()  # the scan also updates the recent Claude projects
             except Exception as e:
                 self.emit({"type": "error", "message": f"worktree scan failed: {e}"})
             self._worktrees_wake.wait(WORKTREES_REFRESH_SECONDS)
@@ -285,6 +318,75 @@ class Bridge:
         self._refresh_worktrees()
         self._wake.set()
         return result
+
+    # -- running scripts -----------------------------------------------------
+
+    def _refresh_runnable(self) -> None:
+        """Scripts of every project on screen, every project with a run, and the recent Claude projects."""
+        if self._supervisor is None:
+            return
+        with self._state_lock:
+            on_screen = set(self._snapshot_roots)
+            recent = set(self._recent_roots)
+        runs = {r["project_root"] for r in self._supervisor.payload()}
+        payload = []
+        for root in sorted(on_screen | recent | runs):
+            scripts = runnable.scripts(root)
+            if not scripts:
+                continue
+            default = runnable.default_script(scripts, self._supervisor.last.get(root))
+            payload.append({
+                "root": root,
+                "name": resolve_project(root).name or Path(root).name,
+                "scripts": [_asdict(s) for s in scripts],
+                "default": default.id if default else None,
+                "recent": root in recent and root not in on_screen,
+            })
+        with self._state_lock:
+            if payload != self._runnable_payload:
+                self._runnable_payload = payload
+                self._runnable_version += 1
+
+    def _require_supervisor(self) -> Supervisor:
+        if self._supervisor is None:
+            raise RuntimeError("Running scripts isn't available")
+        return self._supervisor
+
+    def _cmd_run_script(self, cmd: dict):
+        """Starts a script. With `stop_pid`, first stops the process holding its port."""
+        supervisor = self._require_supervisor()
+        if cmd.get("stop_pid"):
+            pid = int(cmd["stop_pid"])
+            if not kill_process(pid):
+                raise RuntimeError(f"Could not stop PID {pid}")
+        root = str(cmd["root"])
+        with self._state_lock:
+            servers = list(self._servers)
+        try:
+            run = supervisor.start(root, str(cmd["script"]), resolve_project(root).name, servers)
+        except PortConflict as conflict:
+            return {"run": None, "conflict": dataclasses.asdict(conflict)}
+        self._refresh_runnable()
+        return {"run": _asdict(run), "conflict": None}
+
+    def _cmd_stop_run(self, cmd: dict):
+        return _asdict(self._require_supervisor().stop(str(cmd["run"])))
+
+    def _cmd_restart_run(self, cmd: dict):
+        with self._state_lock:
+            servers = list(self._servers)
+        try:
+            run = self._require_supervisor().restart(str(cmd["run"]), servers)
+        except PortConflict as conflict:
+            return {"run": None, "conflict": dataclasses.asdict(conflict)}
+        return {"run": _asdict(run), "conflict": None}
+
+    def _cmd_clear_run(self, cmd: dict):
+        self._require_supervisor().clear(str(cmd["run"]))
+        return None
+
+    def _cmd_restart_on_crash(self, cmd: dict):
+        return _asdict(self._require_supervisor().set_restart_on_crash(str(cmd["run"]), bool(cmd.get("on"))))
 
     # -- usage ---------------------------------------------------------------
 
@@ -506,6 +608,11 @@ class DemoBridge(Bridge):
         self._has_claude = True
         self._usage_enabled = False
         self._profile = "personal"
+        from devdash import demo
+        demo.write_run_logs()
+
+    def _create_supervisor(self) -> Supervisor | None:
+        return None  # never touch the real runs in demo mode
 
     def _snapshot(self) -> dict:
         from devdash import demo
@@ -516,6 +623,7 @@ class DemoBridge(Bridge):
             "system": demo.system(),
             "node": demo.node(),
             "servers": demo.servers(),
+            "runs": demo.runs(),
             "lan_ip": demo.LAN_IP,
             "projects": demo.projects(),
             # Demo paths do not exist, so the Compose working dir stands in for the resolved project.
@@ -530,6 +638,7 @@ class DemoBridge(Bridge):
             snapshot["claude"] = self._cmd_refresh_claude({})
             snapshot["usage"] = demo.usage()
             snapshot["worktrees"] = demo.worktrees()
+            snapshot["runnable"] = demo.runnable()
         self._tick += 1
         return snapshot
 
@@ -591,6 +700,39 @@ class DemoBridge(Bridge):
     def _cmd_project_sessions(self, cmd: dict):
         from devdash import demo
         return demo.project_detail(str(cmd["path"]))["recent_sessions"]
+
+    def _demo_run(self, run_id: str) -> dict:
+        from devdash import demo
+        run = next((r for r in demo.runs() if r["id"] == run_id), None)
+        if run is None:
+            raise RuntimeError("Not a run devdash started")
+        return {**run, "status": "running", "exit_code": None}
+
+    def _cmd_run_script(self, cmd: dict):
+        from devdash import demo
+        root, script = str(cmd["root"]), str(cmd["script"])
+        entry = next((e for e in demo.runnable() if e["root"] == root), None)
+        found = next((s for s in (entry or {}).get("scripts", []) if s["id"] == script), None)
+        if entry is None or found is None:
+            raise RuntimeError(f"No script {script} in {root}")
+        return {"run": {
+            "id": f"{root}#{script}", "project_root": root, "project_name": entry["name"], "script_id": script,
+            "name": found["name"], "command": found["command"], "cwd": found["cwd"], "package": found["package"],
+            "log": f"{demo.RUN_LOG_DIR}/storefront-dev.log", "pid": 70001, "started": time.time(), "status": "running",
+            "exit_code": None, "ended": 0.0, "restart_on_crash": False, "restarts": [], "gave_up": False, "ports": [],
+        }, "conflict": None}
+
+    def _cmd_stop_run(self, cmd: dict):
+        return self._demo_run(str(cmd["run"]))
+
+    def _cmd_restart_run(self, cmd: dict):
+        return {"run": self._demo_run(str(cmd["run"])), "conflict": None}
+
+    def _cmd_clear_run(self, cmd: dict):
+        return None
+
+    def _cmd_restart_on_crash(self, cmd: dict):
+        return {**self._demo_run(str(cmd["run"])), "restart_on_crash": bool(cmd.get("on"))}
 
 
 def serve(config: Config, demo: bool = False) -> None:
