@@ -49,6 +49,7 @@ struct DevDashBarApp: App {
         WindowGroup("Logs", id: "logs", for: LogTarget.self) { $target in
             if let target {
                 LogsView(target: target)
+                    .environment(store)
             }
         }
         .defaultSize(width: 760, height: 480)

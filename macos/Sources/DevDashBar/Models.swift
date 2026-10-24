@@ -78,8 +78,11 @@ struct Server: Decodable, Sendable, Identifiable, Hashable {
     /// Nil from a devdash CLI older than 0.5.
     let urls: [ServerURL]?
     let exposeHint: String?
+    /// The managed run this process belongs to, when devdash started it. Nil from a CLI older than 0.7.
+    let runId: String?
 
     var id: Int { pid }
+    var isManaged: Bool { runId != nil }
     var isBackground: Bool { kind == "background" }
     var isApp: Bool { kind == "app" }
 
@@ -115,7 +118,7 @@ extension Server {
             kind: node.ports.isEmpty ? "background" : "app", command: node.command,
             cpuPercent: node.cpuPercent, memoryMb: node.memoryMb, ports: node.ports, uptime: node.uptime,
             started: 0, cwd: node.cwd, cwdFull: node.cwdFull, projectRoot: "", projectName: node.project, package: "",
-            urls: nil, exposeHint: nil
+            urls: nil, exposeHint: nil, runId: nil
         )
     }
 }
@@ -128,6 +131,75 @@ struct ServerURL: Decodable, Sendable, Hashable {
     let lan: String?
     /// Whether the port listens beyond loopback.
     let exposed: Bool
+}
+
+/// A dev server devdash started (devdash/supervisor.py).
+struct ManagedRun: Decodable, Sendable, Hashable, Identifiable {
+    let id: String
+    let projectRoot: String
+    let projectName: String
+    let scriptId: String
+    let name: String
+    let command: String
+    let cwd: String
+    let package: String
+    let log: String
+    /// Also the process group, which every process the script starts belongs to.
+    let pid: Int
+    let started: Double
+    /// "running", "restarting" (waiting to restart after a crash), "exited" or "crashed".
+    let status: String
+    let exitCode: Int?
+    let ended: Double
+    let restartOnCrash: Bool
+    let restarts: [Double]
+    /// Crashed too often in a row, so restart on crash stopped.
+    let gaveUp: Bool
+    let ports: [Int]
+
+    var isAlive: Bool { status == "running" || status == "restarting" }
+    var isCrashed: Bool { status == "crashed" }
+    /// "dev" or "web dev" for a script of a workspace package.
+    var title: String { package.isEmpty ? name : "\(package) \(name)" }
+    var startDate: Date { Date(timeIntervalSince1970: started) }
+    var endDate: Date { Date(timeIntervalSince1970: ended) }
+}
+
+/// Something a project can run: a package.json script or a Procfile entry (devdash/runnable.py).
+struct RunScript: Decodable, Sendable, Hashable, Identifiable {
+    let id: String
+    let name: String
+    let command: String
+    let source: String
+    let cwd: String
+    let package: String
+
+    var title: String { package.isEmpty ? name : "\(package) \(name)" }
+}
+
+struct RunnableProject: Decodable, Sendable, Hashable, Identifiable {
+    let root: String
+    let name: String
+    let scripts: [RunScript]
+    /// What "Run" starts: the script run last time, else the first.
+    let `default`: String?
+    /// A recent Claude project with nothing on screen, offered under "Ready to run".
+    let recent: Bool
+
+    var id: String { root }
+    var defaultScript: RunScript? { scripts.first { $0.id == `default` } ?? scripts.first }
+}
+
+struct PortConflict: Decodable, Sendable, Hashable {
+    let port: Int
+    let pid: Int
+    let label: String
+    let project: String
+}
+
+struct RunResult: Decodable, Sendable {
+    let run: ManagedRun?
+    let conflict: PortConflict?
 }
 
 /// A repository with linked worktrees (devdash/worktrees.py).
@@ -343,6 +415,10 @@ struct Snapshot: Decodable, Sendable {
     let system: SystemStats
     let node: [NodeProcess]
     let servers: [Server]?
+    /// Dev servers devdash started, nil from a CLI older than 0.7.
+    let runs: [ManagedRun]?
+    /// Only sent when it changed.
+    let runnable: [RunnableProject]?
     let projects: [ProjectInfo]?
     /// Only sent when the worktree scan changed, about once a minute at most.
     let worktrees: [WorktreeRepo]?
