@@ -253,6 +253,86 @@ def usage() -> dict:
     }
 
 
+CODEX_MODELS = [("gpt-6.1-sol", 0.71), ("gpt-6-astra", 0.21), ("gpt-6-luna", 0.08)]
+
+CODEX_SESSIONS = [
+    # title, project, branch, model, tokens, source
+    ("Port the analytics ingest worker to Go", "analytics", "feat/go-ingest", "gpt-6.1-sol", 18_400_000, "cli"),
+    ("Review the checkout PR for race conditions", "storefront", "feat/checkout", "gpt-6-astra", 6_900_000, "vscode"),
+    ("Generate API client from the OpenAPI spec", "storefront", "chore/api-client", "gpt-6.1-sol", 4_200_000, "cli"),
+    ("Add offline cache to the mobile feed", "mobile-app", "feat/offline", "gpt-6.1-sol", 9_800_000, "vscode"),
+    ("Explain the Terraform drift in staging", "infra", "main", "gpt-6-luna", 1_100_000, "cli"),
+]
+
+
+def codex() -> dict:
+    sessions = []
+    for i, (title, project, branch, model, tokens, source) in enumerate(CODEX_SESSIONS):
+        modified = datetime.now() - timedelta(hours=i * 7 + 2)
+        sessions.append({
+            "session_id": f"demo-codex-{i}", "title": title, "project_path": f"{HOME}/code/{project}",
+            "git_branch": branch, "model": model, "tokens": tokens, "source": source,
+            "modified": modified.strftime("%Y-%m-%d %H:%M"), "last_active": f"{i * 7 + 2}h ago",
+        })
+    projects: dict[str, dict] = {}
+    for session in sessions:
+        path = session["project_path"]
+        if path in projects:
+            projects[path]["sessions"] += 1
+            projects[path]["tokens"] += session["tokens"]
+        else:
+            projects[path] = {"name": path.rsplit("/", 1)[-1], "path": path, "sessions": 1, "tokens": session["tokens"],
+                              "last_active": session["last_active"], "is_running": path.endswith("/analytics")}
+    return {
+        "instances": [
+            {"pid": 73120, "project": "analytics", "cwd": "~/code/analytics", "tty": "/dev/ttys009",
+             "cpu_percent": round(_wave(5, 4, phase=1.3), 1), "memory_mb": 142.0, "uptime": "24m",
+             "cwd_full": f"{HOME}/code/analytics"},
+        ],
+        "projects": list(projects.values()),
+        "sessions": sessions,
+    }
+
+
+def codex_usage() -> dict:
+    today = date.today()
+    daily = [[(today - timedelta(days=offset)).isoformat(), round(_day_cost(offset + 3) * 0.45, 2)] for offset in range(29, -1, -1)]
+
+    def totals(days: int, scale: float = 1.0) -> dict:
+        cost = sum(c for _, c in daily[-days:]) * scale
+        return {"cost": cost, "input": int(cost * 60_000), "output": int(cost * 14_000),
+                "cache_write": 0, "cache_read": int(cost * 610_000), "reasoning": int(cost * 9_000),
+                "requests": int(cost * 9)}
+
+    month = totals(30)
+    now = time.time()
+    return {
+        "profile": None,
+        "plan": "Pro",
+        "limits": [
+            {"label": "Session (5h)", "group": "session", "percent": 71.0, "severity": "normal",
+             "resets_at": now + 1 * 3600 + 48 * 60, "is_active": True, "window_seconds": 18000},
+            {"label": "Weekly", "group": "weekly", "percent": 38.0, "severity": "normal",
+             "resets_at": now + 4 * 86400 + 2 * 3600, "is_active": False, "window_seconds": 604800},
+        ],
+        "credits": None,
+        "extra_usage": None,
+        "error": None,
+        "note": None,
+        "limits_updated": now,
+        "periods": {"today": totals(1), "week": totals(7), "month": month, "all": totals(30, 3.1)},
+        "session": totals(1, 0.6),
+        "models": [
+            {"model": model, **{k: (v * share if k == "cost" else int(v * share)) for k, v in month.items()}}
+            for model, share in CODEX_MODELS
+        ],
+        "projects": [[name, month["cost"] * share] for name, share in
+                     (("analytics", 0.38), ("storefront", 0.31), ("mobile-app", 0.22), ("infra", 0.09))],
+        "daily": daily,
+        "unpriced_models": [],
+    }
+
+
 def process_detail(pid: int) -> dict:
     proc = next((p for p in NODE if p[0] == pid), NODE[0])
     port = proc[4][0] if proc[4] else 3000
