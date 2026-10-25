@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/enso-works/devdash)](https://github.com/enso-works/devdash/releases)
 ![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
-See and manage your dev servers, Docker containers and Claude Code sessions from one place. It comes as a terminal dashboard and a native macOS menu bar app.
+See and manage your dev servers, Docker containers, and Claude Code and Codex sessions from one place. It comes as a terminal dashboard and a native macOS menu bar app.
 
 ![DevDash menu bar app](screenshots/app/hero.png)
 
@@ -19,6 +19,7 @@ See and manage your dev servers, Docker containers and Claude Code sessions from
 - **Disk tree**: a treemap of your home folder that shows what takes up space and suggests what you can safely reclaim.
 - **Claude Code**: running sessions, projects and recent sessions. Resume any of them in a new Terminal window.
 - **Claude usage**: your plan limits (5-hour session and weekly) and what your usage would cost at API prices.
+- **Codex**: running sessions, projects and recent threads, your ChatGPT plan's Codex limits with reset times, and what the tokens would cost at OpenAI API prices. See [Codex usage and API-equivalent cost](#codex-usage-and-api-equivalent-cost).
 - **Separate Claude accounts**: work and personal Claude Code accounts on one Mac, picked by the folder you start in, with an account switcher in the menu bar and `gh` following the same folders. See [Separate Claude accounts](#separate-claude-accounts).
 - **Keep awake**: a mouse jiggler in the menu bar. Stops the Mac sleeping and keeps Teams and Slack from marking you away. See [Menu bar app](#menu-bar-app-macos).
 - **System**: CPU, memory, swap, disk, network and the heaviest processes.
@@ -66,7 +67,7 @@ Run it again to update. You can also run `devdash --update`, or use the prompt t
 open ~/Applications/DevDash.app
 ```
 
-The menu bar shows how many dev servers and containers are running, plus your current Claude session usage (for example `9 · 42%`). The icon switches to a flame when CPU or memory goes over your configured threshold, and to a cup while keep awake is on. Click it to open the dashboard.
+The menu bar shows how many dev servers and containers are running, plus your current Claude and Codex session usage (for example `9 · 42%`, or `9 · C 42% · X 71%` with both). The icon switches to a flame when CPU or memory goes over your configured threshold, and to a cup while keep awake is on. Click it to open the dashboard.
 
 | Running, by project | Project overview | System |
 |---|---|---|
@@ -75,11 +76,13 @@ The menu bar shows how many dev servers and containers are running, plus your cu
 | ![Claude](screenshots/app/claude.png) | ![Usage](screenshots/app/usage.png) | ![Cleanup](screenshots/app/cleanup.png) |
 | **Claude project** | **Process details** | **Dependency graph** |
 | ![Project](screenshots/app/project.png) | ![Details](screenshots/app/detail.png) | ![Graph](screenshots/app/graph.png) |
+| **Codex** | **Codex usage** | **Codex project** |
+| ![Codex](screenshots/app/codex.png) | ![Codex usage](screenshots/app/codex-usage.png) | ![Codex project](screenshots/app/codex-project.png) |
 
 What you can do:
 
-- **Needs you**: one list at the top for anything that wants your attention: cleanup suggestions, low disk space, disk space worth a look, and plan limits over 80%. Dismiss an item and it stays hidden until it changes. The list disappears when there is nothing to show.
-- **Running**: dev servers, Docker containers and Claude sessions, grouped by project (the git repository they run in). Each project header shows the branch and has a menu to open the project in your editor, Finder or Terminal, start a Claude session there, or stop everything in it. Services, servers outside any project and Node processes without a port are grouped at the bottom. Choose **Type** next to the filter to group by dev servers, Compose stacks, Claude sessions, services and background processes instead.
+- **Needs you**: one list at the top for anything that wants your attention: cleanup suggestions, low disk space, disk space worth a look, and Claude or Codex plan limits over 80%. Dismiss an item and it stays hidden until it changes. The list disappears when there is nothing to show.
+- **Running**: dev servers, Docker containers and Claude and Codex sessions, grouped by project (the git repository they run in). Each project header shows the branch and has a menu to open the project in your editor, Finder or Terminal, start a Claude or Codex session there, or stop everything in it. Services, servers outside any project and Node processes without a port are grouped at the bottom. Choose **Type** next to the filter to group by dev servers, Compose stacks, Claude sessions, Codex sessions, services and background processes instead.
   - Click a port chip to open `localhost:<port>` (https when the server speaks it), or Option-click to copy the URL. Hover a row to open it in your editor or kill it (click twice to confirm). Right-click any row for all its actions.
   - Click a server for process details: command, children, network connections, open files and environment. Click a container to stream its logs in a separate window, with filtering, follow mode and copy.
 - **Run dev servers**: **Run dev** and a **Run** submenu in every project's menu, and recent projects under **Ready to run**. See [Running dev servers](#running-dev-servers).
@@ -90,10 +93,14 @@ What you can do:
   - plan limits and API-equivalent cost;
   - running sessions, projects and recent sessions;
   - project pages with one-click launch: new session, continue, plan mode, resume picker, skip permissions, or a plain terminal in that folder.
+- **Codex**:
+  - plan limits and API-equivalent cost;
+  - Codex running in a terminal, projects and recent threads (from the CLI and the Codex app); click a thread to resume it in Terminal;
+  - project pages with new session, continue last, read-only and the resume picker.
 - **Cleanup**: listed under Needs you when devdash finds idle, orphaned or zombie processes, or containers running longer than your stale threshold. Pick which ones to remove and clean them up together.
 - **Footer**: Disk tree, dependency graph and activity heatmap. The `...` menu has JSON export, the terminal UI, What's new, Check for updates and Quit.
 - **Keep awake**: the cup in the header. While it's on, the Mac doesn't sleep, and after 50 seconds without input devdash moves the cursor one point and back, too fast to see, so Teams and Slack keep you active. Moving the cursor needs Accessibility access, which macOS asks for the first time you turn it on; without it only the sleep prevention works. It stays on across restarts. More in [Mouse jiggler for Mac](https://bavrk.com/articles/mouse-jiggler-for-mac).
-- **Keyboard**: Cmd+1 to Cmd+3 switch tabs, Cmd+F filters, Esc clears the filter.
+- **Keyboard**: Cmd+1 to Cmd+4 switch tabs, Cmd+F filters, Esc clears the filter.
 - **Notifications**: a macOS notification when a dev server starts or exits, a container stops, a watched port comes up, or a server devdash started crashes.
 - **Settings**: launch at login, editor (VS Code or Cursor), whether the menu bar shows the count and usage percentage, notifications, and a custom `devdash` path.
 
@@ -192,6 +199,21 @@ The Claude tab has a usage card, and tapping it opens a detail page.
   - Your subscription is billed separately; this number shows what the same work would cost on the API.
 
 Everything is computed locally. The only network request is the plan-limits lookup to `api.anthropic.com`.
+
+### Codex usage and API-equivalent cost
+
+The Codex tab has the same usage card and detail page.
+
+- **Plan limits**: the 5-hour and weekly Codex limits of your ChatGPT plan, the same ones Codex's `/status` shows, with reset times, your plan and any credits.
+  - They're read with the Codex login already on your machine (`~/.codex/auth.json`, or `$CODEX_HOME`).
+  - devdash never refreshes or stores that token. If it has expired, or you're offline, it shows the limits Codex last reported in your sessions instead, and says so.
+- **API-equivalent cost**: what the tokens in your local Codex sessions (`~/.codex/sessions` and `~/.codex/archived_sessions`) would cost at [OpenAI API list prices](https://developers.openai.com/api/docs/pricing).
+  - It accounts for per-model rates, cached input, cache writes, reasoning tokens (billed as output), Fast mode and long-context requests over 272K input tokens.
+  - Models without a public API price, such as `codex-auto-review`, are listed as unpriced instead of guessed.
+  - Archived sessions are zstd-compressed; devdash reads them with the `zstd` command (`brew install zstd`), and counts how many it skipped without it.
+  - Your ChatGPT plan is billed separately; this number shows what the same work would cost on the API.
+
+The only network request is the plan-limits lookup to `chatgpt.com`.
 
 ### Separate Claude accounts
 
@@ -333,6 +355,7 @@ The app needs Xcode 16+ (Swift 6) and macOS 14+. Useful tools:
 | Command | What it does |
 |---------|--------------|
 | `python -m devdash.claude_usage` | Print the usage payload (limits and costs) as JSON |
+| `python -m devdash.codex_usage` | Print the Codex usage payload as JSON |
 | `macos/.build/debug/DevDashBar --selftest` | Start the bridge and check every command decodes |
 | `macos/.build/release/DevDashBar --scan <path>` | Run the disk scanner and print totals, timing and cleanup suggestions |
 | `DEVDASH_DEMO=1 macos/.build/debug/DevDashBar --render <dir>` | Render every app screen to PNG using demo data |
@@ -378,6 +401,8 @@ devdash/
   processes.py     # process, Docker, system and Claude Code data collection
   claude_usage.py  # plan limits and API-equivalent cost from transcripts
   claude_profiles.py # Claude Code profiles from ~/.config/claude-profiles
+  codex.py         # running Codex sessions, and projects and threads from Codex's state database
+  codex_usage.py   # Codex plan limits and API-equivalent cost from session rollouts
   servers.py       # dev servers in any language and the project each belongs to
   network.py       # LAN address and the network URL of each server
   worktrees.py     # git worktrees across repositories, and removing them safely
