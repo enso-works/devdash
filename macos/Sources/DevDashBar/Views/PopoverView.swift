@@ -38,10 +38,11 @@ private struct RouteView: View {
         case let .serverURL(pid, port): ServerURLView(pid: pid, port: port)
         case let .worktrees(repo, cleanup): WorktreesView(repo: repo, cleanup: cleanup)
         case let .claudeProject(path): ClaudeProjectView(path: path)
+        case let .codexProject(path): CodexProjectView(path: path)
         case .cleanup: CleanupView()
         case .graph: GraphView()
         case .heatmap: HeatmapView()
-        case .usage: UsageView()
+        case let .usage(agent): UsageView(agent: agent)
         case .settings: SettingsView()
         case .whatsNew: WhatsNewView()
         }
@@ -101,6 +102,7 @@ private struct MainView: View {
                         switch store.tab {
                         case .running: RunningTab()
                         case .claude: ClaudeTab()
+                        case .codex: CodexTab()
                         case .system: SystemTab()
                         }
                     }
@@ -289,6 +291,8 @@ private struct TabBar: View {
                             CountBadge(count: count, selected: selected)
                         }
                     }
+                    // Each tab gets its full title, and the space left over is shared.
+                    .fixedSize()
                     .foregroundStyle(selected ? .primary : .secondary)
                     .frame(maxWidth: .infinity)
                     .frame(height: 26)
@@ -312,13 +316,14 @@ private struct TabBar: View {
     }
 
     private var visibleTabs: [Tab] {
-        Tab.allCases.filter { $0 != .claude || store.hasClaude }
+        Tab.allCases.filter { ($0 != .claude || store.hasClaude) && ($0 != .codex || store.hasCodex) }
     }
 
     private func count(for tab: Tab) -> Int? {
         switch tab {
         case .running: store.activeCount
         case .claude: store.claude?.instances.count
+        case .codex: store.codex?.instances.count
         case .system: nil
         }
     }
@@ -358,7 +363,7 @@ private struct SearchField: View {
     private var placeholder: String {
         switch store.tab {
         case .running: "Filter by project, port, name..."
-        case .claude: "Filter projects and sessions..."
+        case .claude, .codex: "Filter projects and sessions..."
         case .system: "Filter processes..."
         }
     }

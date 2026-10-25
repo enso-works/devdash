@@ -104,10 +104,16 @@ enum SelfTest {
                 return "\(s.count) sessions"
             }
         }
-        await step("usage") {
-            let u = try await bridge.request("usage", as: ClaudeUsage?.self)
-            let today = u?.periods.today.cost ?? 0
-            return "plan=\(u?.plan ?? "-") limits=\(u?.limits.count ?? 0) today=$\(String(format: "%.2f", today)) models=\(u?.models.count ?? 0) error=\(u?.error ?? "none")"
+        for command in ["usage", "codex_usage"] {
+            await step(command) {
+                let u = try await bridge.request(command, as: AgentUsage?.self)
+                let today = u?.periods.today.cost ?? 0
+                return "plan=\(u?.plan ?? "-") limits=\(u?.limits.count ?? 0) today=$\(String(format: "%.2f", today)) models=\(u?.models.count ?? 0) error=\(u?.error ?? "none")"
+            }
+        }
+        await step("refresh_codex") {
+            let c = try await bridge.request("refresh_codex", as: CodexPayload?.self)
+            return "instances=\(c?.instances.count ?? 0) projects=\(c?.projects.count ?? 0) sessions=\(c?.sessions.count ?? 0)"
         }
         await step("unknown command errors") {
             do {
@@ -140,7 +146,8 @@ enum Renderer {
 
     @MainActor
     private static func waitForData(_ store: Store) async {
-        for _ in 0..<80 where store.system == nil || (store.hasClaude && (store.claude == nil || store.usage == nil)) {
+        for _ in 0..<80 where store.system == nil || (store.hasClaude && (store.claude == nil || store.usage == nil))
+            || (store.hasCodex && (store.codex == nil || store.codexUsage == nil)) {
             try? await Task.sleep(for: .milliseconds(250))
         }
     }
@@ -197,12 +204,15 @@ enum Renderer {
             ("running-type", { toggleProjects(store); store.grouping = .type }),
             ("system", { store.grouping = .project; store.tab = .system }),
             ("claude", { store.tab = .claude }),
+            ("codex", { store.tab = .codex }),
             ("cleanup", { store.tab = .running; store.routes = [.cleanup] }),
             ("whatsnew", { store.routes = [.whatsNew] }),
             ("heatmap", { store.routes = [.heatmap] }),
-            ("usage", { store.routes = [.usage] }),
+            ("usage", { store.routes = [.usage(.claude)] }),
+            ("codex-usage", { store.routes = [.usage(.codex)] }),
             ("graph", { store.routes = [.graph] }),
             ("project", { store.routes = store.claude?.projects.first.map { [.claudeProject(path: $0.path)] } ?? [] }),
+            ("codex-project", { store.routes = store.codex?.projects.first.map { [.codexProject(path: $0.path)] } ?? [] }),
             ("detail", { store.routes = store.servers.first.map { [.processDetail(pid: $0.pid, name: $0.displayName)] } ?? [] }),
             ("settings", { store.routes = [.settings] }),
             ("qrcode", { store.routes = urlRoute(store) { $0.primaryURL?.lan != nil } }),
@@ -256,7 +266,7 @@ enum Renderer {
         await waitForData(claudeStore)
         await waitForData(usageStore)
         claudeStore.tab = .claude
-        usageStore.routes = [.usage]
+        usageStore.routes = [.usage(.claude)]
         let hero = host(HeroView(stores: [store, claudeStore, usageStore], disk: disk), size: HeroView.size)
         try? await Task.sleep(for: .milliseconds(1500))
         capture(hero, to: dir.appendingPathComponent("hero.png"))

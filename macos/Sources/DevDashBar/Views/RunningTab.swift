@@ -14,10 +14,11 @@ struct RunningGroup: Identifiable {
     var servers: [Server] = []
     var containers: [DockerContainer] = []
     var claude: [ClaudeInstance] = []
+    var codex: [CodexInstance] = []
     /// Runs devdash started that have no server row: starting, without a port, or ended.
     var runs: [ManagedRun] = []
 
-    var count: Int { servers.count + containers.count + claude.count + runs.count }
+    var count: Int { servers.count + containers.count + claude.count + codex.count + runs.count }
     var isEmpty: Bool { count == 0 }
     var collapsedByDefault: Bool { kind == .services || kind == .other || kind == .background }
     var stoppable: Int { servers.filter { !$0.isBackground }.count + containers.count + runs.filter(\.isAlive).count }
@@ -26,7 +27,9 @@ struct RunningGroup: Identifiable {
     var memoryMb: Double { servers.reduce(0) { $0 + $1.memoryMb } }
 
     /// Groups by project, with Services, Other and Background at the end.
-    static func byProject(servers: [Server], containers: [DockerContainer], claude: [ClaudeInstance], runs: [ManagedRun] = []) -> [RunningGroup] {
+    static func byProject(
+        servers: [Server], containers: [DockerContainer], claude: [ClaudeInstance], codex: [CodexInstance] = [], runs: [ManagedRun] = []
+    ) -> [RunningGroup] {
         var projects: [String: RunningGroup] = [:]
         var services = RunningGroup(id: "@services", kind: .services, name: "Services")
         var other = RunningGroup(id: "@other", kind: .other, name: "Other")
@@ -69,6 +72,15 @@ struct RunningGroup: Identifiable {
                 other.claude.append(instance)
             }
         }
+        for instance in codex {
+            if let root = instance.projectRoot, !root.isEmpty {
+                var group = project(root, instance.projectName ?? "")
+                group.codex.append(instance)
+                projects[root] = group
+            } else {
+                other.codex.append(instance)
+            }
+        }
         for run in runs {
             var group = project(run.projectRoot, run.projectName)
             group.runs.append(run)
@@ -83,8 +95,10 @@ struct RunningGroup: Identifiable {
         return (sorted + [services, other, background]).filter { !$0.isEmpty }
     }
 
-    /// Dev servers, Compose stacks, Claude sessions, Services and Background, as the old Dev and Docker tabs did.
-    static func byType(servers: [Server], containers: [DockerContainer], claude: [ClaudeInstance], runs: [ManagedRun] = []) -> [RunningGroup] {
+    /// Dev servers, Compose stacks, Claude and Codex sessions, Services and Background, as the old Dev and Docker tabs did.
+    static func byType(
+        servers: [Server], containers: [DockerContainer], claude: [ClaudeInstance], codex: [CodexInstance] = [], runs: [ManagedRun] = []
+    ) -> [RunningGroup] {
         var groups = [RunningGroup(id: "@servers", kind: .category, name: "Dev servers", servers: servers.filter { $0.kind == "app" }, runs: runs)]
         let stacks = Dictionary(grouping: containers, by: \.composeProject).sorted { lhs, rhs in
             if lhs.key.isEmpty != rhs.key.isEmpty { return !lhs.key.isEmpty }
@@ -96,6 +110,7 @@ struct RunningGroup: Identifiable {
                 : RunningGroup(id: "@stack-\(name)", kind: .stack, name: name, containers: members))
         }
         groups.append(RunningGroup(id: "@claude", kind: .category, name: "Claude sessions", claude: claude))
+        groups.append(RunningGroup(id: "@codex", kind: .category, name: "Codex sessions", codex: codex))
         groups.append(RunningGroup(id: "@services", kind: .services, name: "Services", servers: servers.filter(\.isService)))
         groups.append(RunningGroup(
             id: "@background", kind: .background, name: "Background",
@@ -112,6 +127,7 @@ struct RunningGroup: Identifiable {
         group.servers = servers.filter { $0.matches(query: query) }
         group.containers = containers.filter { $0.matches(query: query) }
         group.claude = claude.filter { $0.project.matches(query: query) || $0.cwd.matches(query: query) }
+        group.codex = codex.filter { $0.project.matches(query: query) || $0.cwd.matches(query: query) }
         group.runs = runs.filter { $0.name.matches(query: query) || $0.command.matches(query: query) || $0.package.matches(query: query) }
         return group.isEmpty ? nil : group
     }
@@ -139,10 +155,11 @@ struct RunningTab: View {
 
     var body: some View {
         let claude = store.claudeInstances
+        let codex = store.codexInstances
         let runs = store.runsWithoutServers()
         let all = store.grouping == .project
-            ? RunningGroup.byProject(servers: store.servers, containers: store.docker, claude: claude, runs: runs)
-            : RunningGroup.byType(servers: store.servers, containers: store.docker, claude: claude, runs: runs)
+            ? RunningGroup.byProject(servers: store.servers, containers: store.docker, claude: claude, codex: codex, runs: runs)
+            : RunningGroup.byType(servers: store.servers, containers: store.docker, claude: claude, codex: codex, runs: runs)
         let groups = all.compactMap { $0.filtered(by: store.query) }
 
         if all.isEmpty {
@@ -150,7 +167,7 @@ struct RunningTab: View {
                 symbol: "moon.zzz",
                 title: "Nothing running",
                 message: store.readyToRun.isEmpty
-                    ? "Dev servers in any language, Docker containers and Claude sessions show up here, grouped by project."
+                    ? "Dev servers in any language, Docker containers and Claude and Codex sessions show up here, grouped by project."
                     : "Start a dev server from a recent project below, or from a terminal."
             )
             ReadyToRunSection()
@@ -183,6 +200,7 @@ private struct GroupRows: View {
         }
         ForEach(group.containers) { ContainerRow(container: $0) }
         ForEach(group.claude) { ClaudeInstanceRow(instance: $0, inGroup: inProject) }
+        ForEach(group.codex) { CodexInstanceRow(instance: $0, inGroup: inProject) }
         ForEach(group.runs) { RunRow(run: $0, showProject: !inProject) }
     }
 }
@@ -302,6 +320,9 @@ private struct GroupMenuItems: View {
             Button("Open in Terminal") { Launcher.launchClaude(.shell, in: root) }
             if store.hasClaude {
                 Button("New Claude Session") { Launcher.launchClaude(.new, in: root) }
+            }
+            if store.hasCodex {
+                Button("New Codex Session") { Launcher.launchCodex(.new, in: root) }
             }
             Button("Copy Path") { Pasteboard.copy(root) }
             if let project = store.runnable[root], !project.scripts.isEmpty {
@@ -460,7 +481,7 @@ struct ServerRow: View {
     }
 }
 
-/// A small colored mark for a runtime, container or Claude session.
+/// A small colored mark for a runtime, container or Claude or Codex session.
 struct RuntimeBadge: View {
     let runtime: String
     var tint: Color?
@@ -509,6 +530,7 @@ struct RuntimeBadge: View {
         case "memcached": Style(mark: "MC", color: .gray, name: "Memcached")
         case "docker": Style(symbol: "shippingbox.fill", color: .blue, name: "Docker container")
         case "claude": Style(symbol: "sparkle", color: .orange, name: "Claude Code")
+        case "codex": Style(symbol: "terminal.fill", color: .primary, name: "Codex")
         default: Style(symbol: "terminal", color: .gray, name: "Process")
         }
     }

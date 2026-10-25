@@ -155,6 +155,36 @@ enum ClaudeLaunch: String, CaseIterable, Identifiable {
     }
 }
 
+enum CodexLaunch: String, CaseIterable, Identifiable {
+    case new, continueSession, readOnly, resume
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .new: "New session"
+        case .continueSession: "Continue last"
+        case .readOnly: "Read-only"
+        case .resume: "Resume picker"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .new: "plus.bubble"
+        case .continueSession: "arrow.uturn.forward"
+        case .readOnly: "eye"
+        case .resume: "clock.arrow.circlepath"
+        }
+    }
+    var command: String {
+        switch self {
+        case .new: "codex"
+        case .continueSession: "codex resume --last"
+        case .readOnly: "codex --sandbox read-only"
+        case .resume: "codex resume"
+        }
+    }
+}
+
 enum Launcher {
     static func openURL(_ string: String) {
         guard let url = URL(string: string) else { return }
@@ -197,6 +227,14 @@ enum Launcher {
 
     static func resumeClaude(session: String, in path: String) {
         runInTerminal("claude --resume \(shellQuote(session))", in: path)
+    }
+
+    static func launchCodex(_ mode: CodexLaunch, in path: String) {
+        runInTerminal(mode.command, in: path)
+    }
+
+    static func resumeCodex(session: String, in path: String) {
+        runInTerminal("codex resume \(shellQuote(session))", in: path)
     }
 
     /// Signs a Claude profile in. `env` skips any `claude` shell function, which would pick the account by folder.

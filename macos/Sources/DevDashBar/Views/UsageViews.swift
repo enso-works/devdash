@@ -27,11 +27,12 @@ private func limitTint(_ limit: PlanLimit) -> Color {
     return .accentColor
 }
 
-// MARK: - Card on the Claude tab
+// MARK: - Card on the Claude and Codex tabs
 
 struct UsageCard: View {
     @Environment(Store.self) private var store
-    let usage: ClaudeUsage
+    let usage: AgentUsage
+    let agent: Agent
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -46,10 +47,10 @@ struct UsageCard: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 Spacer()
-                if store.isPending("usage") {
+                if store.isPending(agent.usageCommand) {
                     ProgressView().controlSize(.mini)
                 } else {
-                    IconButton(symbol: "arrow.clockwise", help: "Refresh usage", size: 18) { store.refreshUsage(force: true) }
+                    IconButton(symbol: "arrow.clockwise", help: "Refresh usage", size: 18) { store.refreshUsage(agent, force: true) }
                 }
             }
 
@@ -60,6 +61,12 @@ struct UsageCard: View {
             } else {
                 ForEach(usage.limits.filter { $0.percent > 0 || $0.group == "session" || $0.label.hasPrefix("Weekly, all") }) {
                     LimitRow(limit: $0)
+                }
+                if let note = usage.note {
+                    Text(note)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
                 }
             }
 
@@ -79,7 +86,7 @@ struct UsageCard: View {
         }
         .card(radius: 10, padding: 10)
         .contentShape(.rect)
-        .onTapGesture { store.push(.usage) }
+        .onTapGesture { store.push(.usage(agent)) }
     }
 }
 
@@ -124,32 +131,34 @@ struct LimitRow: View {
 
 struct UsageView: View {
     @Environment(Store.self) private var store
+    let agent: Agent
 
     var body: some View {
         VStack(spacing: 0) {
-            SubPageHeader(title: "Claude usage", subtitle: "Plan limits and API-equivalent cost") {
-                if store.isPending("usage") {
+            SubPageHeader(title: "\(agent.name) usage", subtitle: "Plan limits and API-equivalent cost") {
+                if store.isPending(agent.usageCommand) {
                     ProgressView().controlSize(.small).frame(width: 24)
                 } else {
-                    IconButton(symbol: "arrow.clockwise", help: "Refresh") { store.refreshUsage(force: true) }
+                    IconButton(symbol: "arrow.clockwise", help: "Refresh") { store.refreshUsage(agent, force: true) }
                 }
             }
             Divider().opacity(0.5)
-            if let usage = store.usage {
+            if let usage = store.usage(for: agent) {
                 ScrollView {
-                    UsageBody(usage: usage).padding(12)
+                    UsageBody(usage: usage, agent: agent).padding(12)
                 }
                 .scrollIndicators(.never)
             } else {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onAppear { store.refreshUsage() }
+                    .onAppear { store.refreshUsage(agent) }
             }
         }
     }
 }
 
 private struct UsageBody: View {
-    let usage: ClaudeUsage
+    let usage: AgentUsage
+    let agent: Agent
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -189,6 +198,16 @@ private struct UsageBody: View {
                 Text("Extra usage: \(Format.dollars(used))" + (extra.limit.map { " of \(Format.dollars($0))" } ?? ""))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
+            }
+            if let credits = usage.credits {
+                Text(credits.unlimited ? "Unlimited credits" : "Credits left: \(Format.count(Int(credits.balance)))")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            if let note = usage.note {
+                Text(note)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.orange)
             }
         }
         .card()
@@ -255,12 +274,19 @@ private struct UsageBody: View {
 
     private var tokenMix: some View {
         let month = usage.periods.month
-        let rows: [(String, Int, Color)] = [
+        let reasoning = month.reasoning ?? 0
+        let rows: [(String, Int, Color)] = agent == .claude ? [
             ("Cache reads", month.cacheRead, .teal),
             ("Cache writes", month.cacheWrite, .indigo),
             ("Output", month.output, .orange),
             ("Uncached input", month.input, .pink),
-        ]
+        ] : [
+            ("Cached input", month.cacheRead, .teal),
+            ("Cache writes", month.cacheWrite, .indigo),
+            ("Output", month.output - reasoning, .orange),
+            ("Reasoning", reasoning, .purple),
+            ("Uncached input", month.input, .pink),
+        ].filter { $0.0 != "Cache writes" || $0.1 > 0 }
         let total = max(month.tokens, 1)
         return VStack(alignment: .leading, spacing: 7) {
             HStack {
@@ -293,7 +319,9 @@ private struct UsageBody: View {
 
     private var footnote: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Costs use Anthropic API list prices (input, output, 5m/1h cache writes, cache reads, fast mode, web search) applied to the token counts in your local Claude Code transcripts. Your subscription is billed separately.")
+            Text(agent == .claude
+                ? "Costs use Anthropic API list prices (input, output, 5m/1h cache writes, cache reads, fast mode, web search) applied to the token counts in your local Claude Code transcripts. Your subscription is billed separately."
+                : "Costs use OpenAI API list prices (input, cached input, cache writes, output with reasoning, Fast mode, long context) applied to the token counts in your local Codex sessions. Your ChatGPT plan is billed separately.")
             if !usage.unpricedModels.isEmpty {
                 Text("No price known for: \(usage.unpricedModels.joined(separator: ", "))")
                     .foregroundStyle(.orange)
