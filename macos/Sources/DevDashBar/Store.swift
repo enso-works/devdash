@@ -10,13 +10,14 @@ enum ConnectionState: Equatable {
 }
 
 enum Tab: String, CaseIterable, Identifiable {
-    case running, claude, system
+    case running, claude, codex, system
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .running: "Running"
         case .claude: "Claude"
+        case .codex: "Codex"
         case .system: "System"
         }
     }
@@ -24,9 +25,19 @@ enum Tab: String, CaseIterable, Identifiable {
         switch self {
         case .running: "play.circle"
         case .claude: "sparkle"
+        case .codex: "terminal"
         case .system: "gauge.with.dots.needle.33percent"
         }
     }
+}
+
+/// A coding agent whose plan usage devdash shows.
+enum Agent: String, Hashable {
+    case claude, codex
+
+    var name: String { self == .claude ? "Claude" : "Codex" }
+    /// Key of the pending refresh, also the bridge command.
+    var usageCommand: String { self == .claude ? "usage" : "codex_usage" }
 }
 
 /// How the Running tab groups its rows.
@@ -43,10 +54,11 @@ enum Route: Hashable {
     /// All repositories, or one; `cleanup` shows only merged worktrees nothing runs in.
     case worktrees(repo: String?, cleanup: Bool)
     case claudeProject(path: String)
+    case codexProject(path: String)
     case cleanup
     case graph
     case heatmap
-    case usage
+    case usage(Agent)
     case settings
     case whatsNew
 }
@@ -97,7 +109,9 @@ final class Store {
     private(set) var processes: [GeneralProcess] = []
     private(set) var cleanup: [CleanupSuggestion] = []
     private(set) var claude: ClaudePayload?
-    private(set) var usage: ClaudeUsage?
+    private(set) var usage: AgentUsage?
+    private(set) var codex: CodexPayload?
+    private(set) var codexUsage: AgentUsage?
     private(set) var lastUpdate: Date?
     private(set) var connection: ConnectionState = .starting
     /// The devdash CLI the bridge runs, also used to open the terminal UI.
@@ -109,6 +123,7 @@ final class Store {
         didSet {
             UserDefaults.standard.set(tab.rawValue, forKey: SettingsKey.tab)
             if tab == .claude { refreshClaude() }
+            if tab == .codex { refreshCodex() }
         }
     }
     var grouping: Grouping = Grouping(rawValue: UserDefaults.standard.string(forKey: SettingsKey.grouping) ?? "") ?? .project {
@@ -134,9 +149,14 @@ final class Store {
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var tracker = ChangeTracker()
     @ObservationIgnored private var lastClaudeUpdate: Date?
+    @ObservationIgnored private var lastCodexUpdate: Date?
 
     var config: BridgeConfig { hello?.config ?? BridgeConfig() }
     var hasClaude: Bool { hello?.hasClaude ?? false }
+    var hasCodex: Bool { hello?.hasCodex ?? false }
+    var codexInstances: [CodexInstance] { codex?.instances ?? [] }
+
+    func usage(for agent: Agent) -> AgentUsage? { agent == .claude ? usage : codexUsage }
     var appServers: [Server] { servers.filter { $0.kind == "app" } }
     var activeCount: Int { appServers.count + docker.count }
     var claudeInstances: [ClaudeInstance] { claude?.instances ?? [] }
@@ -234,6 +254,11 @@ final class Store {
             self.claude = claude
             lastClaudeUpdate = .now
         }
+        if let codexUsage = snapshot.codexUsage { self.codexUsage = codexUsage }
+        if let codex = snapshot.codex {
+            self.codex = codex
+            lastCodexUpdate = .now
+        }
         lastUpdate = Date(timeIntervalSince1970: snapshot.timestamp)
         cpuHistory.append(snapshot.system.cpuPercent)
         if cpuHistory.count > 40 { cpuHistory.removeFirst(cpuHistory.count - 40) }
@@ -260,6 +285,16 @@ final class Store {
         }
     }
 
+    func refreshCodex() {
+        guard hasCodex else { return }
+        if let lastCodexUpdate, Date.now.timeIntervalSince(lastCodexUpdate) < 5 { return }
+        Task {
+            guard let payload = try? await bridge.request("refresh_codex", as: CodexPayload.self) else { return }
+            codex = payload
+            lastCodexUpdate = .now
+        }
+    }
+
     /// Shows another profile's projects, sessions and usage in the Claude tab.
     func selectClaudeProfile(_ name: String) {
         guard name != selectedClaudeProfile else { return }
@@ -282,14 +317,16 @@ final class Store {
     }
 
     /// Re-reads transcripts now; `force` also re-fetches plan limits instead of using the cached ones.
-    func refreshUsage(force: Bool = false) {
-        guard hasClaude, !pending.contains("usage") else { return }
-        pending.insert("usage")
+    func refreshUsage(_ agent: Agent, force: Bool = false) {
+        let key = agent.usageCommand
+        guard agent == .claude ? hasClaude : hasCodex, !pending.contains(key) else { return }
+        pending.insert(key)
         Task {
-            defer { pending.remove("usage") }
-            if let payload = try? await bridge.request("usage", ["force": force], as: ClaudeUsage?.self),
-               isCurrentProfile(payload.profile) {
-                usage = payload
+            defer { pending.remove(key) }
+            guard let payload = try? await bridge.request(key, ["force": force], as: AgentUsage?.self) else { return }
+            switch agent {
+            case .claude: if isCurrentProfile(payload.profile) { usage = payload }
+            case .codex: codexUsage = payload
             }
         }
     }
@@ -427,11 +464,12 @@ final class Store {
 
     var crashedRuns: [ManagedRun] { runs.filter(\.isCrashed) }
 
-    /// Projects that can run something and have nothing on screen: the recent Claude projects.
+    /// Projects that can run something and have nothing on screen: the recent Claude and Codex projects.
     var readyToRun: [RunnableProject] {
         var busy = Set(servers.map(\.projectRoot))
         busy.formUnion(docker.compactMap(\.projectRoot))
         busy.formUnion(claudeInstances.compactMap(\.projectRoot))
+        busy.formUnion(codexInstances.compactMap(\.projectRoot))
         busy.formUnion(runs.map(\.projectRoot))
         return runnable.values
             .filter { !busy.contains($0.root) && !$0.scripts.isEmpty }
@@ -550,15 +588,16 @@ final class Store {
         worktreeRepos.first { $0.worktrees.contains { $0.path == root } }
     }
 
-    /// Dev servers and Claude sessions running inside a worktree.
-    func activity(in worktree: Worktree) -> (servers: [Server], sessions: [ClaudeInstance]) {
+    /// Dev servers and Claude and Codex sessions running inside a worktree.
+    func activity(in worktree: Worktree) -> (servers: [Server], sessions: [ClaudeInstance], codex: [CodexInstance]) {
         (servers.filter { self.worktree(containing: $0.cwdFull)?.path == worktree.path },
-         claudeInstances.filter { self.worktree(containing: $0.cwdFull)?.path == worktree.path })
+         claudeInstances.filter { self.worktree(containing: $0.cwdFull)?.path == worktree.path },
+         codexInstances.filter { self.worktree(containing: $0.cwdFull)?.path == worktree.path })
     }
 
     func status(of worktree: Worktree) -> String {
         let activity = activity(in: worktree)
-        return activity.servers.isEmpty && activity.sessions.isEmpty ? worktree.status : "running"
+        return activity.servers.isEmpty && activity.sessions.isEmpty && activity.codex.isEmpty ? worktree.status : "running"
     }
 
     /// Merged worktrees with nothing running and no edits for a day: safe to remove.

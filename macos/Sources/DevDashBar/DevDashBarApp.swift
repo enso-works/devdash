@@ -90,8 +90,11 @@ struct MenuBarLabel: View {
     private var text: String? {
         var parts: [String] = []
         if showCount, store.activeCount > 0 { parts.append("\(store.activeCount)") }
-        if showUsage, let session = store.usage?.sessionLimit {
-            parts.append("\(Int(session.percent.rounded()))%")
+        if showUsage {
+            let sessions = [("C", store.usage?.sessionLimit), ("X", store.codexUsage?.sessionLimit)]
+                .compactMap { mark, limit in limit.map { (mark, Int($0.percent.rounded())) } }
+            // With both, a letter tells them apart: C for Claude, X for Codex.
+            parts += sessions.map { sessions.count > 1 ? "\($0.0) \($0.1)%" : "\($0.1)%" }
         }
         return parts.joined(separator: " · ")
     }

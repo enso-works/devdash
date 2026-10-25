@@ -20,7 +20,7 @@ struct ClaudeTab: View {
                     .padding(.top, 10)
             }
             if let usage = store.usage {
-                UsageCard(usage: usage)
+                UsageCard(usage: usage, agent: .claude)
                     .padding(.horizontal, 4)
                     .padding(.top, 10)
             } else if let stats = claude.stats {
@@ -365,25 +365,31 @@ private struct LaunchGrid: View {
     var body: some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
             ForEach(ClaudeLaunch.allCases) { mode in
-                LaunchButton(mode: mode) { Launcher.launchClaude(mode, in: path) }
+                LaunchButton(label: mode.label, symbol: mode.symbol, command: mode.command, warning: mode == .skipPermissions) {
+                    Launcher.launchClaude(mode, in: path)
+                }
             }
         }
     }
 }
 
-private struct LaunchButton: View {
-    let mode: ClaudeLaunch
+struct LaunchButton: View {
+    let label: String
+    let symbol: String
+    /// Shown on hover.
+    let command: String
+    var warning = false
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Image(systemName: mode.symbol)
+                Image(systemName: symbol)
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(mode == .skipPermissions ? .orange : Color.accentColor)
+                    .foregroundStyle(warning ? .orange : Color.accentColor)
                     .frame(width: 16)
-                Text(mode.label)
+                Text(label)
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
@@ -396,7 +402,7 @@ private struct LaunchButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(mode.command)
+        .help(command)
     }
 }
 

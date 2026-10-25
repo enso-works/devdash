@@ -8,7 +8,7 @@ struct AttentionItem: Identifiable, Equatable {
         static func < (lhs: Severity, rhs: Severity) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
-    enum Action: Equatable { case retry, cleanup, disk, usage, whatsNew, worktrees, runLogs(String), stopAndRun }
+    enum Action: Equatable { case retry, cleanup, disk, usage(Agent), whatsNew, worktrees, runLogs(String), stopAndRun }
 
     let id: String
     let severity: Severity
@@ -87,15 +87,19 @@ enum Attention {
             ))
         }
 
-        if let limit = store.usage?.limits.filter({ $0.percent >= limitThreshold }).max(by: { $0.percent < $1.percent }) {
+        for agent in [Agent.claude, .codex] {
+            guard let limit = store.usage(for: agent)?.limits.filter({ $0.percent >= limitThreshold }).max(by: { $0.percent < $1.percent })
+            else { continue }
             let percent = Int(limit.percent.rounded())
             var detail = "\(limit.label) limit"
             if let reset = limit.resetDate {
                 detail += ", resets " + reset.formatted(.relative(presentation: .named))
             }
             items.append(AttentionItem(
-                id: "limit", severity: limit.percent >= 95 ? .critical : .warning, symbol: "gauge.with.dots.needle.67percent",
-                title: "\(percent)% of your plan limit used", detail: detail, actionTitle: "Usage", action: .usage,
+                // Claude keeps the id it had before Codex, so dismissals carry over.
+                id: agent == .claude ? "limit" : "limit-codex", severity: limit.percent >= 95 ? .critical : .warning,
+                symbol: "gauge.with.dots.needle.67percent",
+                title: "\(percent)% of your \(agent.name) plan limit used", detail: detail, actionTitle: "Usage", action: .usage(agent),
                 signature: "\(limit.label)-\(percent / 5)"
             ))
         }
@@ -193,7 +197,7 @@ struct AttentionSection: View {
         switch item.action {
         case .retry: store.start()
         case .cleanup: store.push(.cleanup)
-        case .usage: store.push(.usage)
+        case .usage(let agent): store.push(.usage(agent))
         case .whatsNew: store.push(.whatsNew)
         case .worktrees: store.push(.worktrees(repo: nil, cleanup: true))
         case .stopAndRun: store.resolvePortConflict()

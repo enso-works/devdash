@@ -204,7 +204,7 @@ class TranscriptIndex:
 
 
 def _bucket() -> dict:
-    return {"cost": 0.0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0, "requests": 0}
+    return {"cost": 0.0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0, "reasoning": 0, "requests": 0}
 
 
 def _add(bucket: dict, entry: UsageEntry, cost: float) -> None:
@@ -213,6 +213,7 @@ def _add(bucket: dict, entry: UsageEntry, cost: float) -> None:
     bucket["output"] += entry.output
     bucket["cache_write"] += entry.cache_write
     bucket["cache_read"] += entry.cache_read
+    bucket["reasoning"] += getattr(entry, "reasoning", 0)  # Codex only; Claude counts thinking as output
     bucket["requests"] += 1
 
 

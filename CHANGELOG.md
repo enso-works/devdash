@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+- **Codex tab**: Codex running in a terminal, projects and recent threads from the CLI and the Codex app, read from Codex's own state database. Click a thread to resume it in Terminal (`codex resume <id>`); project pages have new session, continue last, read-only and the resume picker.
+- **Codex usage**: the 5-hour and weekly Codex limits of your ChatGPT plan with reset times, plan and credits, from the same endpoint Codex's `/status` uses. When the login has expired or the request fails, the limits Codex last reported in your sessions are shown instead, with a note.
+- **Codex API-equivalent cost** at OpenAI list prices for today, 7 days, 30 days, all time and the current session, by model, project and token type (cached input, uncached input, output and reasoning). Covers Fast mode, cache writes and long-context requests; models without a public price are listed as unpriced.
+- Archived Codex sessions (`.jsonl.zst`) are read with the `zstd` command.
+- Codex sessions show up in Running, grouped by project, and keep a worktree from being removed while they run in it.
+- Needs you warns when a Codex limit goes over 80%, like Claude's.
+- The menu bar shows both session percentages when Claude and Codex are both used, for example `C 42% · X 71%`.
+- Project and worktree menus have **New Codex Session**.
+- Recent Codex projects are offered under Ready to run.
+- `devdash --serve` sends `has_codex` in hello, `codex` and `codex_usage` in snapshots, and has `refresh_codex` and `codex_usage` commands.
+
+### Changed
+- Tabs size to their titles, so Running, Claude, Codex and System fit side by side. Cmd+1 to Cmd+4 switch tabs.
+
 ## 0.7.0
 
 ### Added

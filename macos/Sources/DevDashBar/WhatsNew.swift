@@ -14,6 +14,14 @@ enum WhatsNew {
     }
 
     static let releases: [Release] = [
+        Release(version: "0.8.0", entries: [
+            Entry(symbol: "terminal", title: "Codex tab",
+                  detail: "Codex sessions, projects and threads next to Claude's. Click a thread to resume it in Terminal."),
+            Entry(symbol: "gauge.with.dots.needle.67percent", title: "Codex limits and cost",
+                  detail: "Your 5-hour and weekly Codex limits with reset times, and what your tokens would cost at OpenAI API prices."),
+            Entry(symbol: "menubar.rectangle", title: "Both in the menu bar",
+                  detail: "With Claude and Codex both in use, the menu bar shows each session limit, such as C 42% and X 71%."),
+        ]),
         Release(version: "0.7.0", entries: [
             Entry(symbol: "play.fill", title: "Run dev servers",
                   detail: "Run dev, or any package.json script or Procfile entry, from a project's menu. Recent projects wait under Ready to run."),

@@ -20,6 +20,8 @@ import psutil
 from devdash import __version__
 from devdash.claude_profiles import github_signed_in, load_profiles
 from devdash.claude_usage import UsageTracker
+from devdash.codex import CODEX_HOME, codex_payload, get_codex_projects
+from devdash.codex_usage import CodexUsageTracker
 from devdash.config import Config
 from devdash.processes import (
     _parse_host_ports_from_string,
@@ -47,7 +49,7 @@ from devdash import runnable, worktrees
 CLAUDE_REFRESH_EVERY = 5  # ticks
 USAGE_REFRESH_SECONDS = 30.0
 WORKTREES_REFRESH_SECONDS = 60.0
-RECENT_PROJECTS = 10  # per Claude profile, offered under "Ready to run"
+RECENT_PROJECTS = 10  # per Claude profile and for Codex, offered under "Ready to run"
 
 
 def _asdict(obj):
@@ -91,7 +93,15 @@ class Bridge:
         self._usage_payload: dict | None = None
         self._usage_version = 0
         self._usage_sent = 0
-        self._busy_cwds: list[str] = []  # where servers and Claude sessions run, for remove_worktree
+        self._has_codex = CODEX_HOME.is_dir()
+        self._codex_roots: set[str] = set()
+        self._codex_cwds: list[str] = []
+        self._codex_usage_enabled = self._has_codex
+        self._codex_tracker: CodexUsageTracker | None = None
+        self._codex_usage_payload: dict | None = None
+        self._codex_usage_version = 0
+        self._codex_usage_sent = 0
+        self._busy_cwds: list[str] = []  # where servers and Claude and Codex sessions run, for remove_worktree
         self._snapshot_roots: set[str] = set()
         self._worktrees_wake = threading.Event()
         self._worktrees_payload: list | None = None
@@ -125,13 +135,14 @@ class Bridge:
             "type": "hello",
             "version": __version__,
             "has_claude": self._has_claude,
+            "has_codex": self._has_codex,
             "config": _asdict(self._config),
         })
         # Prime psutil cpu_percent so the first real snapshot has values.
         psutil.cpu_percent(interval=0)
         get_node_processes()
         threading.Thread(target=self._read_commands, daemon=True).start()
-        if self._usage_enabled:
+        if self._usage_enabled or self._codex_usage_enabled:
             threading.Thread(target=self._usage_loop, daemon=True).start()
         threading.Thread(target=self._worktrees_loop, daemon=True).start()
         if self._supervisor is not None:
@@ -193,10 +204,14 @@ class Bridge:
 
         docker_dicts = [_with_project(_asdict(c), c.compose_working_dir) for c in docker]
         claude = self._claude_payload() if self._has_claude and self._tick % CLAUDE_REFRESH_EVERY == 0 else None
-        roots = {s.project_root for s in servers} | {d["project_root"] for d in docker_dicts} | self._claude_roots
+        codex = self._codex_payload() if self._has_codex and self._tick % CLAUDE_REFRESH_EVERY == 0 else None
+        roots = (
+            {s.project_root for s in servers} | {d["project_root"] for d in docker_dicts}
+            | self._claude_roots | self._codex_roots
+        )
         with self._state_lock:
             self._snapshot_roots = roots - {""}
-            self._busy_cwds = [s.cwd_full for s in servers] + list(self._claude_cwds)
+            self._busy_cwds = [s.cwd_full for s in servers] + list(self._claude_cwds) + list(self._codex_cwds)
             self._servers = server_dicts
         if self._tick % CLAUDE_REFRESH_EVERY == 0:
             self._refresh_runnable()
@@ -217,10 +232,15 @@ class Bridge:
 
         if claude is not None:
             snapshot["claude"] = claude
+        if codex is not None:
+            snapshot["codex"] = codex
         with self._state_lock:
             if self._usage_version != self._usage_sent:
                 snapshot["usage"] = self._usage_payload
                 self._usage_sent = self._usage_version
+            if self._codex_usage_version != self._codex_usage_sent:
+                snapshot["codex_usage"] = self._codex_usage_payload
+                self._codex_usage_sent = self._codex_usage_version
             if self._worktrees_version != self._worktrees_sent:
                 snapshot["worktrees"] = self._worktrees_payload
                 self._worktrees_sent = self._worktrees_version
@@ -265,11 +285,26 @@ class Bridge:
             "stats": _claude_stats_payload(get_claude_stats(selected.dir)),
         }
 
+    def _codex_payload(self) -> dict:
+        payload = codex_payload()
+        instances = []
+        for inst in payload["instances"]:
+            d = _asdict(inst)
+            d["cwd_full"] = _expand(inst.cwd)
+            instances.append(_with_project(d, d["cwd_full"]))
+        self._codex_roots = {d["project_root"] for d in instances}
+        self._codex_cwds = [d["cwd_full"] for d in instances]
+        return {
+            "instances": instances,
+            "projects": [_asdict(p) for p in payload["projects"]],
+            "sessions": [_asdict(s) for s in payload["sessions"]],
+        }
+
     # -- worktrees -----------------------------------------------------------
 
     def _worktree_candidates(self) -> set[str]:
-        """Folders to look for repositories in: projects on screen, and the Claude projects of every
-        profile. Also notes the most recent Claude projects, which are offered under "Ready to run"."""
+        """Folders to look for repositories in: projects on screen, the Claude projects of every
+        profile and the Codex projects. Also notes the most recent ones, offered under "Ready to run"."""
         with self._state_lock:
             paths = set(self._snapshot_roots)
         recent: set[str] = set()
@@ -281,6 +316,13 @@ class Bridge:
                     continue
                 paths |= {p.path for p in projects}
                 recent |= {p.path for p in projects[:RECENT_PROJECTS]}
+        if self._has_codex:
+            try:
+                projects = get_codex_projects()
+            except Exception:
+                projects = []
+            paths |= {p.path for p in projects}
+            recent |= {p.path for p in projects[:RECENT_PROJECTS]}
         with self._state_lock:
             self._recent_roots = {root for root in (resolve_project(p).root for p in recent) if root}
         return paths
@@ -297,7 +339,7 @@ class Bridge:
         while not self._stop.is_set():
             try:
                 self._refresh_worktrees()
-                self._refresh_runnable()  # the scan also updates the recent Claude projects
+                self._refresh_runnable()  # the scan also updates the recent Claude and Codex projects
             except Exception as e:
                 self.emit({"type": "error", "message": f"worktree scan failed: {e}"})
             self._worktrees_wake.wait(WORKTREES_REFRESH_SECONDS)
@@ -322,7 +364,7 @@ class Bridge:
     # -- running scripts -----------------------------------------------------
 
     def _refresh_runnable(self) -> None:
-        """Scripts of every project on screen, every project with a run, and the recent Claude projects."""
+        """Scripts of every project on screen, every project with a run, and the recent Claude and Codex projects."""
         if self._supervisor is None:
             return
         with self._state_lock:
@@ -391,9 +433,12 @@ class Bridge:
     # -- usage ---------------------------------------------------------------
 
     def _usage_loop(self) -> None:
-        # Transcript parsing and the limits request are slow, so they run off the snapshot loop.
+        # Transcript parsing and the limits requests are slow, so they run off the snapshot loop.
         while not self._stop.is_set():
-            self._refresh_usage()
+            if self._usage_enabled:
+                self._refresh_usage()
+            if self._codex_usage_enabled:
+                self._refresh_codex_usage()
             self._stop.wait(USAGE_REFRESH_SECONDS)
 
     def _tracker(self) -> UsageTracker:
@@ -414,6 +459,19 @@ class Bridge:
         with self._state_lock:
             self._usage_payload = payload
             self._usage_version += 1
+        return payload
+
+    def _refresh_codex_usage(self, force_limits: bool = False) -> dict | None:
+        if self._codex_tracker is None:
+            self._codex_tracker = CodexUsageTracker()
+        try:
+            payload = self._codex_tracker.payload(force_limits=force_limits)
+        except Exception as e:
+            self.emit({"type": "error", "message": f"codex usage failed: {e}"})
+            return None
+        with self._state_lock:
+            self._codex_usage_payload = payload
+            self._codex_usage_version += 1
         return payload
 
     # -- commands ------------------------------------------------------------
@@ -459,6 +517,16 @@ class Bridge:
         if not self._usage_enabled:
             return None
         return self._refresh_usage(force_limits=bool(cmd.get("force")))
+
+    def _cmd_refresh_codex(self, cmd: dict):
+        if not self._has_codex:
+            return None
+        return self._codex_payload()
+
+    def _cmd_codex_usage(self, cmd: dict):
+        if not self._codex_usage_enabled:
+            return None
+        return self._refresh_codex_usage(force_limits=bool(cmd.get("force")))
 
     def _cmd_claude_profile(self, cmd: dict):
         """Switches which profile's projects, sessions and usage the Claude views show."""
@@ -607,6 +675,8 @@ class DemoBridge(Bridge):
         super().__init__(config)
         self._has_claude = True
         self._usage_enabled = False
+        self._has_codex = True
+        self._codex_usage_enabled = False
         self._profile = "personal"
         from devdash import demo
         demo.write_run_logs()
@@ -637,6 +707,8 @@ class DemoBridge(Bridge):
         if self._tick % CLAUDE_REFRESH_EVERY == 0:
             snapshot["claude"] = self._cmd_refresh_claude({})
             snapshot["usage"] = demo.usage()
+            snapshot["codex"] = self._cmd_refresh_codex({})
+            snapshot["codex_usage"] = demo.codex_usage()
             snapshot["worktrees"] = demo.worktrees()
             snapshot["runnable"] = demo.runnable()
         self._tick += 1
@@ -652,6 +724,17 @@ class DemoBridge(Bridge):
     def _cmd_usage(self, cmd: dict):
         from devdash import demo
         return demo.usage()
+
+    def _cmd_refresh_codex(self, cmd: dict):
+        from devdash import demo
+        payload = demo.codex()
+        for inst in payload["instances"]:
+            inst["project_root"], inst["project_name"] = inst["cwd_full"], inst["project"]
+        return payload
+
+    def _cmd_codex_usage(self, cmd: dict):
+        from devdash import demo
+        return demo.codex_usage()
 
     def _cmd_claude_profile(self, cmd: dict):
         self._profile = str(cmd["name"])

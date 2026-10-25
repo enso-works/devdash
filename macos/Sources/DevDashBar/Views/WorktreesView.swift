@@ -55,7 +55,7 @@ struct WorktreesView: View {
                             RepoHeader(repo: repo, count: worktrees.count)
                             ForEach(worktrees) { WorktreeRow(worktree: $0, repo: repo) }
                         }
-                        Text("Worktrees with uncommitted changes, or with a server or Claude session running in them, can't be removed here.")
+                        Text("Worktrees with uncommitted changes, or with a server or a Claude or Codex session running in them, can't be removed here.")
                             .font(.system(size: 10.5))
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 8)
@@ -171,6 +171,9 @@ private struct WorktreeRow: View {
             if store.hasClaude {
                 Button("New Claude Session") { Launcher.launchClaude(.new, in: worktree.path) }
             }
+            if store.hasCodex {
+                Button("New Codex Session") { Launcher.launchCodex(.new, in: worktree.path) }
+            }
             Button("Reveal in Finder") { Launcher.revealInFinder(worktree.path) }
             Divider()
             Button("Copy Path") { Pasteboard.copy(worktree.path) }
@@ -197,6 +200,7 @@ private struct WorktreeRow: View {
         let activity = store.activity(in: worktree)
         if !activity.servers.isEmpty { parts.append("\(activity.servers.count) server\(activity.servers.count == 1 ? "" : "s")") }
         if !activity.sessions.isEmpty { parts.append("Claude") }
+        if !activity.codex.isEmpty { parts.append("Codex") }
         return parts.joined(separator: "  ·  ")
     }
 

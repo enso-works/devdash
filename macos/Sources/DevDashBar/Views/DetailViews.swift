@@ -490,7 +490,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Show active count in menu bar", isOn: $showCount)
-                        Toggle("Show Claude session usage in menu bar", isOn: $showUsage)
+                        Toggle("Show Claude and Codex session usage in menu bar", isOn: $showUsage)
                         Toggle("Notify when servers start or stop", isOn: $notifications)
                         Toggle("Launch at login", isOn: $launchAtLogin)
                             .onChange(of: launchAtLogin) { _, enabled in setLaunchAtLogin(enabled) }

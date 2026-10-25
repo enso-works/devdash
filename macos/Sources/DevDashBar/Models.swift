@@ -17,6 +17,8 @@ struct BridgeConfig: Decodable, Sendable {
 struct Hello: Decodable, Sendable {
     let version: String
     let hasClaude: Bool
+    /// nil from a CLI older than 0.8.
+    let hasCodex: Bool?
     let config: BridgeConfig
 }
 
@@ -378,6 +380,57 @@ struct ModelUsage: Decodable, Sendable, Hashable {
     }
 }
 
+// MARK: - Codex (devdash/codex.py)
+
+struct CodexInstance: Decodable, Sendable, Identifiable, Hashable {
+    let pid: Int
+    let project: String
+    let cwd: String
+    let tty: String
+    let cpuPercent: Double
+    let memoryMb: Double
+    let uptime: String
+    let cwdFull: String
+    let projectRoot: String?
+    let projectName: String?
+
+    var id: Int { pid }
+}
+
+struct CodexProject: Decodable, Sendable, Identifiable, Hashable {
+    let name: String
+    let path: String
+    let sessions: Int
+    let tokens: Int
+    let lastActive: String
+    let isRunning: Bool
+
+    var id: String { path }
+}
+
+struct CodexSession: Decodable, Sendable, Identifiable, Hashable {
+    let sessionId: String
+    let title: String
+    let projectPath: String
+    let gitBranch: String
+    let model: String
+    let tokens: Int
+    /// "cli", or "vscode" for the Codex app and editor extensions.
+    let source: String
+    let modified: String
+    let lastActive: String
+
+    var id: String { sessionId }
+    var displayTitle: String { title.isEmpty ? "Untitled thread" : title }
+    var projectName: String { (projectPath as NSString).lastPathComponent }
+}
+
+struct CodexPayload: Decodable, Sendable {
+    let instances: [CodexInstance]
+    let projects: [CodexProject]
+    let sessions: [CodexSession]
+}
+
 struct ClaudeStats: Decodable, Sendable {
     let totalSessions: Int
     let totalMessages: Int
@@ -426,7 +479,9 @@ struct Snapshot: Decodable, Sendable {
     let processes: [GeneralProcess]
     let cleanup: [CleanupSuggestion]
     let claude: ClaudePayload?
-    let usage: ClaudeUsage?
+    let usage: AgentUsage?
+    let codex: CodexPayload?
+    let codexUsage: AgentUsage?
 }
 
 struct ProcessDetail: Decodable, Sendable {
@@ -503,14 +558,17 @@ struct ProjectDetail: Decodable, Sendable {
 struct ExportResult: Decodable, Sendable { let path: String }
 struct CleanupResult: Decodable, Sendable { let killed: Int; let stopped: Int; let failed: Int }
 
-// MARK: - Claude usage (devdash/claude_usage.py)
+// MARK: - Plan usage (devdash/claude_usage.py, devdash/codex_usage.py)
 
 struct UsageTotals: Decodable, Sendable, Hashable {
     let cost: Double
     let input: Int
+    /// Includes reasoning.
     let output: Int
     let cacheWrite: Int
     let cacheRead: Int
+    /// Codex only, nil from a CLI older than 0.8.
+    let reasoning: Int?
     let requests: Int
 
     var tokens: Int { input + output + cacheWrite + cacheRead }
@@ -534,8 +592,15 @@ struct ModelCost: Decodable, Sendable, Hashable, Identifiable {
 
     var id: String { model }
 
-    /// "claude-opus-5-5" -> "Opus 5.5", "claude-haiku-4-5-20251001" -> "Haiku 4.5".
-    var displayName: String {
+    var displayName: String { Self.displayName(model) }
+
+    /// "claude-opus-5-5" -> "Opus 5.5", "claude-haiku-4-5-20251001" -> "Haiku 4.5", "gpt-6.1-sol" -> "GPT-6.1-Sol".
+    static func displayName(_ model: String) -> String {
+        if !model.hasPrefix("claude-") {
+            return model.split(separator: "-")
+                .map { $0 == "gpt" ? "GPT" : $0.prefix(1).uppercased() + $0.dropFirst() }
+                .joined(separator: model.hasPrefix("gpt-") ? "-" : " ")
+        }
         var parts = model.split(separator: "-").map(String.init)
         if parts.first == "claude" { parts.removeFirst() }
         if let last = parts.last, last.count == 8, Int(last) != nil { parts.removeLast() }
@@ -564,12 +629,23 @@ struct ExtraUsage: Decodable, Sendable {
     let utilization: Double?
 }
 
-struct ClaudeUsage: Decodable, Sendable {
+struct Credits: Decodable, Sendable {
+    let balance: Double
+    let unlimited: Bool
+}
+
+/// Plan limits and API-equivalent cost of Claude Code or Codex.
+struct AgentUsage: Decodable, Sendable {
+    /// Claude profile; nil for Codex.
     let profile: String?
     let plan: String?
     let limits: [PlanLimit]
     let extraUsage: ExtraUsage?
+    /// Codex credits, when the plan has any.
+    let credits: Credits?
     let error: String?
+    /// Something to know about the numbers, such as limits from the last local report.
+    let note: String?
     let limitsUpdated: Double
     let periods: UsagePeriods
     let session: UsageTotals?
