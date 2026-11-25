@@ -15,6 +15,11 @@
 # (`claude-profile gh`), from the accounts `gh auth login` stored.
 # The profile whose config dir is ~/.claude runs with CLAUDE_CONFIG_DIR unset,
 # because setting it explicitly switches to a different keychain entry.
+#
+# `borrow` runs a folder's own profile (its memory, skills, hooks and history)
+# billed to another account, through that account's long-lived token
+# (`claude-profile token`) in CLAUDE_CODE_OAUTH_TOKEN, which Claude Code uses
+# ahead of the profile's own login. For when one account's limits run out.
 set -euo pipefail
 
 CONFIG="${CLAUDE_PROFILES_CONFIG:-$HOME/.config/claude-profiles}"
@@ -166,6 +171,40 @@ cmd_login() {
     exec_as "$1" auth login
 }
 
+# Keychain entry holding a profile's long-lived token, for `borrow`.
+token_service() { printf 'claude-profile-token-%s' "$1"; }
+
+cmd_token() {
+    [ -n "${1:-}" ] || die "usage: claude-profile token <profile>"
+    local name="$1" dir token
+    dir="$(profile_dir "$name")"
+    printf 'Sign in with the %s account in the browser, then paste the token it prints.\n' "$name" >&2
+    if [ "$dir" = "$DEFAULT_DIR" ]; then
+        env -u CLAUDE_CONFIG_DIR claude setup-token
+    else
+        CLAUDE_CONFIG_DIR="$dir" claude setup-token
+    fi
+    printf 'Token (hidden): ' >&2
+    IFS= read -rs token
+    printf '\n' >&2
+    [ -n "$token" ] || die "no token given, nothing saved"
+    security add-generic-password -U -a "$USER" -s "$(token_service "$name")" -w "$token"
+    printf 'Saved. In a folder of another profile: claude-profile borrow %s\n' "$name" >&2
+}
+
+cmd_borrow() {
+    [ -n "${1:-}" ] || die "usage: claude-profile borrow <profile> [claude args]"
+    local payer="$1" name token
+    shift
+    profile_dir "$payer" >/dev/null
+    token="$(security find-generic-password -a "$USER" -s "$(token_service "$payer")" -w 2>/dev/null)" ||
+        die "no token saved for '$payer': run claude-profile token $payer"
+    name="$(which_profile "$(pwd -P)")"
+    printf 'claude-profile: the %s profile, billed to the %s account\n' "$name" "$payer" >&2
+    export CLAUDE_CODE_OAUTH_TOKEN="$token"
+    exec_as "$name" "$@"
+}
+
 # UserPromptSubmit hook: block the prompt before it reaches the wrong account.
 cmd_guard() {
     local input cwd routed active
@@ -185,6 +224,8 @@ case "${1:-}" in
     status) shift; cmd_status "$@" ;;
     list) cmd_list ;;
     login) shift; cmd_login "$@" ;;
+    token) shift; cmd_token "$@" ;;
+    borrow) shift; cmd_borrow "$@" ;;
     which) which_profile "$(cd "${2:-.}" && pwd -P)"; echo ;;
     gh) shift; cmd_gh "$@" ;;
     guard) cmd_guard ;;
@@ -196,6 +237,10 @@ usage: claude-profile <command>
   status [dir]     show the profile, config dir, account and GitHub account for a folder
   list             show every profile, its signed-in account and GitHub account
   login <profile>  sign a profile in to its Claude account
+  token <profile>  save a long-lived token for a profile's account, for borrow
+  borrow <profile> [args]
+                   run claude as the profile that owns this folder, billed to
+                   <profile>'s account (when this folder's account is out of usage)
   which [dir]      print the profile name for a folder
   guard            UserPromptSubmit hook that blocks the wrong account
 
